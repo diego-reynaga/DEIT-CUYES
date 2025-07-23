@@ -109,14 +109,6 @@ LOGIN_TEMPLATE = """
                             </button>
                         </form>
                         
-                        <hr>
-                        <div class="text-center">
-                            <small class="text-muted">
-                                <strong>Credenciales de prueba:</strong><br>
-                                Email: admin@inia.gob.pe<br>
-                                Contraseña: admin123
-                            </small>
-                        </div>
                     </div>
                     <div class="card-footer text-center">
                         <a href="/" class="btn btn-outline-secondary me-2">
