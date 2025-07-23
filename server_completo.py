@@ -830,8 +830,14 @@ try:
                     <div class='card-body'>
                         <p>Administra el inventario de cuyes del centro.</p>
                         <div class='d-grid gap-2'>
-                            <a href='/cuyes' class='btn btn-primary'>Ver Cuyes</a>
-                            <a href='/cuyes/nuevo' class='btn btn-outline-primary'>Agregar Cuy</a>
+                            <a href='/cuyes' class='btn btn-primary'>Ver Cuyes</a>"""
+        
+        # Solo mostrar "Agregar Cuy" para admin y empleado, no para cliente
+        if current_user.is_admin() or current_user.is_empleado():
+            content += """
+                            <a href='/cuyes/nuevo' class='btn btn-outline-primary'>Agregar Cuy</a>"""
+        
+        content += """
                         </div>
                     </div>
                 </div>
@@ -845,8 +851,14 @@ try:
                     <div class='card-body'>
                         <p>Administra las pozas y su ocupación.</p>
                         <div class='d-grid gap-2'>
-                            <a href='/pozas' class='btn btn-success'>Ver Pozas</a>
-                            <a href='/pozas/nueva' class='btn btn-outline-success'>Agregar Poza</a>
+                            <a href='/pozas' class='btn btn-success'>Ver Pozas</a>"""
+        
+        # Solo mostrar "Agregar Poza" para admin y empleado, no para cliente
+        if current_user.is_admin() or current_user.is_empleado():
+            content += """
+                            <a href='/pozas/nueva' class='btn btn-outline-success'>Agregar Poza</a>"""
+        
+        content += """
                         </div>
                     </div>
                 </div>
@@ -909,7 +921,11 @@ try:
                         </div>
                     </div>
                 </div>
-            </div>
+            </div>"""
+            
+            # Solo mostrar Administración para admin, no para empleado
+            if current_user.is_admin():
+                content += """
             
             <div class='col-md-4 mb-3'>
                 <div class='card'>
@@ -3459,7 +3475,6 @@ try:
                             <p>Administra el inventario de cuyes.</p>
                             <div class='d-grid gap-2'>
                                 <a href='/cuyes' class='btn btn-primary'>Ver Cuyes</a>
-                                <a href='/cuyes/nuevo' class='btn btn-outline-primary'>Agregar Cuy</a>
                             </div>
                         </div>
                     </div>
