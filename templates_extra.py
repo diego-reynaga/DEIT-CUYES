@@ -16,12 +16,31 @@ BASE_TEMPLATE = """
             <a class="navbar-brand" href="/dashboard">
                 <i class="fas fa-seedling"></i> Sistema de Cuyes
             </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/perfil">
+                    <i class="fas fa-user"></i> Mi Perfil
+                </a>
+                <a class="nav-link" href="/logout">
+                    <i class="fas fa-sign-out-alt"></i> Cerrar Sesión
+                </a>
+            </div>
         </div>
     </nav>
     
     <div class="container mt-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
         {{content}}
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """

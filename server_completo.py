@@ -50,11 +50,14 @@ HOME_TEMPLATE = """
                 </div>
                 
                 <div class="mt-4">
-                    <a href="/login" class="btn btn-primary btn-lg me-3">
+                    <a href="/login" class="btn btn-primary btn-lg me-2">
                         <i class="fas fa-sign-in-alt"></i> Iniciar Sesión
                     </a>
-                    <a href="/dashboard" class="btn btn-outline-primary btn-lg">
-                        <i class="fas fa-tachometer-alt"></i> Dashboard
+                    <a href="/registro" class="btn btn-success btn-lg me-2">
+                        <i class="fas fa-user-plus"></i> Crear Cuenta
+                    </a>
+                    <a href="/catalogo" class="btn btn-outline-info btn-lg">
+                        <i class="fas fa-store"></i> Ver Catálogo
                     </a>
                 </div>
             </div>
@@ -116,8 +119,11 @@ LOGIN_TEMPLATE = """
                         </div>
                     </div>
                     <div class="card-footer text-center">
-                        <a href="/" class="btn btn-outline-secondary">
+                        <a href="/" class="btn btn-outline-secondary me-2">
                             <i class="fas fa-arrow-left"></i> Volver al Inicio
+                        </a>
+                        <a href="/registro" class="btn btn-outline-success">
+                            <i class="fas fa-user-plus"></i> Crear Cuenta
                         </a>
                     </div>
                 </div>
@@ -564,6 +570,102 @@ try:
         
         return render_template_string(LOGIN_TEMPLATE, form=form)
     
+    # ========== REGISTRO PÚBLICO PARA CLIENTES ==========
+    @app.route('/registro', methods=['GET', 'POST'])
+    def registro():
+        if request.method == 'POST':
+            # Validar que el email no exista
+            email = request.form.get('email')
+            if Usuario.query.filter_by(email=email).first():
+                flash('El email ya está registrado. Intenta con otro email.', 'danger')
+                return redirect(url_for('registro'))
+            
+            # Crear nuevo usuario cliente
+            usuario = Usuario(
+                nombre=request.form.get('nombre'),
+                apellido=request.form.get('apellido'),
+                email=email,
+                password_hash=generate_password_hash(request.form.get('password')),
+                telefono=request.form.get('telefono', ''),
+                direccion=request.form.get('direccion', ''),
+                rol='cliente',  # Automáticamente asignado como cliente
+                activo=True
+            )
+            
+            db.session.add(usuario)
+            db.session.commit()
+            
+            flash('¡Registro exitoso! Ya puedes iniciar sesión.', 'success')
+            return redirect(url_for('login'))
+        
+        registro_content = """
+        <div class="row justify-content-center">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-success text-white text-center">
+                        <h4><i class="fas fa-user-plus"></i> Registro de Cliente</h4>
+                        <p class="mb-0">Únete a la comunidad INIA</p>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label for="nombre" class="form-label">Nombre *</label>
+                                    <input type="text" class="form-control" id="nombre" name="nombre" required>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="apellido" class="form-label">Apellido *</label>
+                                    <input type="text" class="form-control" id="apellido" name="apellido" required>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="email" class="form-label">Email *</label>
+                                <input type="email" class="form-control" id="email" name="email" required>
+                                <div class="form-text">Usa este email para iniciar sesión</div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="password" class="form-label">Contraseña *</label>
+                                <input type="password" class="form-control" id="password" name="password" required minlength="6">
+                                <div class="form-text">Mínimo 6 caracteres</div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="telefono" class="form-label">Teléfono</label>
+                                <input type="tel" class="form-control" id="telefono" name="telefono" placeholder="Opcional">
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="direccion" class="form-label">Dirección</label>
+                                <textarea class="form-control" id="direccion" name="direccion" rows="2" placeholder="Opcional"></textarea>
+                            </div>
+                            
+                            <div class="alert alert-info">
+                                <small><i class="fas fa-info-circle"></i> 
+                                Al registrarte, obtienes acceso al catálogo de cuyes INIA y podrás realizar compras.</small>
+                            </div>
+                            
+                            <div class="d-grid gap-2">
+                                <button type="submit" class="btn btn-success btn-lg">
+                                    <i class="fas fa-user-plus"></i> Crear Cuenta
+                                </button>
+                                <a href="/login" class="btn btn-outline-secondary">
+                                    <i class="fas fa-sign-in-alt"></i> Ya tengo cuenta
+                                </a>
+                                <a href="/" class="btn btn-link">
+                                    <i class="fas fa-home"></i> Volver al inicio
+                                </a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', registro_content))
+    
     @app.route('/dashboard')
     @login_required
     def dashboard():
@@ -835,7 +937,7 @@ try:
                         <p>Gestiona tu perfil y compras.</p>
                         <div class='d-grid gap-2'>
                             <a href='/mis-compras' class='btn btn-primary'>Mis Compras</a>
-                            <a href='#' class='btn btn-outline-primary'>Editar Perfil</a>
+                            <a href='/perfil' class='btn btn-outline-primary'>Editar Perfil</a>
                         </div>
                     </div>
                 </div>
@@ -862,6 +964,11 @@ try:
     @app.route('/cuyes/nuevo', methods=['GET', 'POST'])
     @login_required
     def nuevo_cuy():
+        # Solo admin y empleados pueden registrar cuyes
+        if not (current_user.is_admin() or current_user.is_empleado()):
+            flash('No tienes permisos para registrar cuyes', 'danger')
+            return redirect(url_for('dashboard'))
+            
         form = CuyForm()
         form.raza_id.choices = [(r.id, r.nombre) for r in Raza.query.all()]
         form.poza_id.choices = [(p.id, f"{p.codigo} - {p.tipo}") for p in Poza.query.all()]
@@ -871,6 +978,7 @@ try:
                 codigo=form.codigo.data,
                 sexo=form.sexo.data,
                 peso_actual=form.peso_actual.data,
+                precio_venta=form.precio_venta.data,
                 raza_id=form.raza_id.data,
                 poza_id=form.poza_id.data,
                 observaciones=form.observaciones.data
@@ -906,6 +1014,11 @@ try:
     @app.route('/razas/nueva', methods=['GET', 'POST'])
     @login_required
     def nueva_raza():
+        # Solo admin puede registrar razas (más restrictivo)
+        if not current_user.is_admin():
+            flash('No tienes permisos para registrar razas', 'danger')
+            return redirect(url_for('dashboard'))
+            
         form = RazaForm()
         if form.validate_on_submit():
             raza = Raza(nombre=form.nombre.data, descripcion=form.descripcion.data)
@@ -941,6 +1054,11 @@ try:
     @app.route('/pozas/nueva', methods=['GET', 'POST'])
     @login_required
     def nueva_poza():
+        # Solo admin y empleados pueden registrar pozas
+        if not (current_user.is_admin() or current_user.is_empleado()):
+            flash('No tienes permisos para registrar pozas', 'danger')
+            return redirect(url_for('dashboard'))
+            
         form = PozaForm()
         if form.validate_on_submit():
             poza = Poza(
@@ -2249,6 +2367,617 @@ try:
         logout_user()
         return redirect(url_for('index'))
     
+    # ========== DASHBOARD MEJORADO CON CONTROL DE ROLES ==========
+    @app.route('/dashboard_new')
+    @login_required
+    def dashboard_new():
+        # Obtener estadísticas básicas
+        total_cuyes = Cuy.query.count()
+        cuyes_disponibles = Cuy.query.filter_by(estado='disponible').count()
+        total_pozas = Poza.query.count()
+        total_ventas = Venta.query.count()
+        
+        # DASHBOARD PARA ADMINISTRADOR
+        if current_user.is_admin():
+            ventas_pendientes = Venta.query.filter_by(estado='pendiente').count()
+            cuyes_en_tratamiento = Cuy.query.filter_by(estado='en_tratamiento').count()
+            total_usuarios = Usuario.query.count()
+            
+            content = f"""
+            <h2><i class='fas fa-tachometer-alt'></i> Dashboard Administrativo</h2>
+            
+            <div class='alert alert-info'>
+                <i class='fas fa-user-shield'></i>
+                <strong>Bienvenido Administrador, {current_user.nombre}</strong><br>
+                Acceso completo al sistema | {datetime.now().strftime('%d/%m/%Y %H:%M')}
+            </div>
+            
+            <div class='row mb-4'>
+                <div class='col-md-3 mb-3'>
+                    <div class='card text-center bg-primary text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-paw fa-2x mb-2'></i>
+                            <h3>{total_cuyes}</h3>
+                            <p>Total Cuyes</p>
+                        </div>
+                    </div>
+                </div>
+                <div class='col-md-3 mb-3'>
+                    <div class='card text-center bg-success text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-check-circle fa-2x mb-2'></i>
+                            <h3>{cuyes_disponibles}</h3>
+                            <p>Disponibles</p>
+                        </div>
+                    </div>
+                </div>
+                <div class='col-md-3 mb-3'>
+                    <div class='card text-center bg-warning text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-exclamation-triangle fa-2x mb-2'></i>
+                            <h3>{ventas_pendientes}</h3>
+                            <p>Ventas Pendientes</p>
+                        </div>
+                    </div>
+                </div>
+                <div class='col-md-3 mb-3'>
+                    <div class='card text-center bg-info text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-users fa-2x mb-2'></i>
+                            <h3>{total_usuarios}</h3>
+                            <p>Usuarios</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class='row'>
+                <div class='col-md-4 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-primary text-white'>
+                            <h5><i class='fas fa-paw'></i> Gestión de Cuyes</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Administra el inventario completo.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/cuyes' class='btn btn-primary'>Ver Cuyes</a>
+                                <a href='/cuyes/nuevo' class='btn btn-outline-primary'>Agregar Cuy</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class='col-md-4 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-success text-white'>
+                            <h5><i class='fas fa-shopping-cart'></i> Ventas</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Gestión de ventas y clientes.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/ventas' class='btn btn-success'>Ver Ventas</a>
+                                <a href='/catalogo' class='btn btn-outline-success'>Catálogo</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class='col-md-4 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-dark text-white'>
+                            <h5><i class='fas fa-cogs'></i> Administración</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Configuración del sistema.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/usuarios' class='btn btn-dark'>Usuarios</a>
+                                <a href='/razas' class='btn btn-outline-dark'>Razas</a>
+                                <a href='/pozas' class='btn btn-outline-dark'>Pozas</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class='col-md-4 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-info text-white'>
+                            <h5><i class='fas fa-chart-bar'></i> Reportes</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Estadísticas y reportes.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/reportes' class='btn btn-info'>Ver Reportes</a>
+                                <a href='/controles' class='btn btn-outline-info'>Controles</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class='col-md-4 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-warning text-white'>
+                            <h5><i class='fas fa-medical-kit'></i> Salud</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Control sanitario y tratamientos.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/tratamientos' class='btn btn-warning'>Tratamientos</a>
+                                <a href='/controles' class='btn btn-outline-warning'>Controles</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """
+            
+        # DASHBOARD PARA EMPLEADO  
+        elif current_user.is_empleado():
+            ventas_pendientes = Venta.query.filter_by(estado='pendiente').count()
+            cuyes_en_tratamiento = Cuy.query.filter_by(estado='en_tratamiento').count()
+            
+            content = f"""
+            <h2><i class='fas fa-user-tie'></i> Dashboard Empleado</h2>
+            
+            <div class='alert alert-success'>
+                <i class='fas fa-user-tie'></i>
+                <strong>Bienvenido, {current_user.nombre}</strong><br>
+                Empleado INIA | {datetime.now().strftime('%d/%m/%Y %H:%M')}
+            </div>
+            
+            <div class='row mb-4'>
+                <div class='col-md-4 mb-3'>
+                    <div class='card text-center bg-primary text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-paw fa-2x mb-2'></i>
+                            <h3>{total_cuyes}</h3>
+                            <p>Total Cuyes</p>
+                        </div>
+                    </div>
+                </div>
+                <div class='col-md-4 mb-3'>
+                    <div class='card text-center bg-success text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-check-circle fa-2x mb-2'></i>
+                            <h3>{cuyes_disponibles}</h3>
+                            <p>Disponibles</p>
+                        </div>
+                    </div>
+                </div>
+                <div class='col-md-4 mb-3'>
+                    <div class='card text-center bg-warning text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-exclamation-triangle fa-2x mb-2'></i>
+                            <h3>{ventas_pendientes}</h3>
+                            <p>Ventas Pendientes</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class='row'>
+                <div class='col-md-6 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-primary text-white'>
+                            <h5><i class='fas fa-paw'></i> Gestión de Cuyes</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Administra el inventario de cuyes.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/cuyes' class='btn btn-primary'>Ver Cuyes</a>
+                                <a href='/cuyes/nuevo' class='btn btn-outline-primary'>Agregar Cuy</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class='col-md-6 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-success text-white'>
+                            <h5><i class='fas fa-shopping-cart'></i> Ventas</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Gestión de ventas.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/ventas' class='btn btn-success'>Ver Ventas</a>
+                                <a href='/catalogo' class='btn btn-outline-success'>Catálogo</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class='col-md-6 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-info text-white'>
+                            <h5><i class='fas fa-chart-bar'></i> Reportes</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Reportes básicos.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/reportes' class='btn btn-info'>Ver Reportes</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class='col-md-6 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-warning text-white'>
+                            <h5><i class='fas fa-medical-kit'></i> Control Sanitario</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Tratamientos y controles.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/tratamientos' class='btn btn-warning'>Tratamientos</a>
+                                <a href='/controles' class='btn btn-outline-warning'>Controles</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """
+            
+        # DASHBOARD PARA CLIENTE
+        else:
+            mis_compras = Venta.query.filter_by(email_cliente=current_user.email).count()
+            mis_compras_pendientes = Venta.query.filter_by(email_cliente=current_user.email, estado='pendiente').count()
+            
+            content = f"""
+            <h2><i class='fas fa-user'></i> Mi Panel de Cliente</h2>
+            
+            <div class='alert alert-primary'>
+                <i class='fas fa-user'></i>
+                <strong>Bienvenido, {current_user.nombre}</strong><br>
+                Cliente INIA | {datetime.now().strftime('%d/%m/%Y %H:%M')}
+            </div>
+            
+            <div class='row mb-4'>
+                <div class='col-md-4 mb-3'>
+                    <div class='card text-center bg-success text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-paw fa-2x mb-2'></i>
+                            <h3>{cuyes_disponibles}</h3>
+                            <p>Cuyes Disponibles</p>
+                        </div>
+                    </div>
+                </div>
+                <div class='col-md-4 mb-3'>
+                    <div class='card text-center bg-primary text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-shopping-bag fa-2x mb-2'></i>
+                            <h3>{mis_compras}</h3>
+                            <p>Mis Compras</p>
+                        </div>
+                    </div>
+                </div>
+                <div class='col-md-4 mb-3'>
+                    <div class='card text-center bg-warning text-white'>
+                        <div class='card-body'>
+                            <i class='fas fa-clock fa-2x mb-2'></i>
+                            <h3>{mis_compras_pendientes}</h3>
+                            <p>Compras Pendientes</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class='row'>
+                <div class='col-md-6 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-success text-white'>
+                            <h5><i class='fas fa-store'></i> Catálogo de Cuyes</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Explora nuestros cuyes disponibles.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/catalogo' class='btn btn-success'>Ver Catálogo</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class='col-md-6 mb-3'>
+                    <div class='card'>
+                        <div class='card-header bg-primary text-white'>
+                            <h5><i class='fas fa-shopping-bag'></i> Mis Compras</h5>
+                        </div>
+                        <div class='card-body'>
+                            <p>Historial de compras y estado.</p>
+                            <div class='d-grid gap-2'>
+                                <a href='/mis-compras' class='btn btn-primary'>Ver Mis Compras</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """
+        
+        content += """
+        <div class='mt-4'>
+            <div class='alert alert-light border'>
+                <h6><i class='fas fa-info-circle text-primary'></i> Sistema de Gestión de Cuyes - INIA Andahuaylas</h6>
+                <p class='mb-0'>Plataforma integral para la administración, venta y seguimiento de cuyes de alta calidad genética.</p>
+            </div>
+        </div>
+        """
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+    
+    # ========== GESTIÓN DE USUARIOS ==========
+    @app.route('/usuarios')
+    @login_required
+    def usuarios():
+        if not current_user.is_admin():
+            flash('No tienes permisos para gestionar usuarios', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        usuarios_list = Usuario.query.all()
+        
+        content = """
+        <h2><i class="fas fa-users"></i> Gestión de Usuarios</h2>
+        
+        <div class="row mb-4">
+            <div class="col-12">
+                <a href="/usuarios/nuevo" class="btn btn-success">
+                    <i class="fas fa-plus"></i> Nuevo Usuario
+                </a>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-list"></i> Lista de Usuarios</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Nombre</th>
+                                        <th>Email</th>
+                                        <th>Rol</th>
+                                        <th>Fecha Registro</th>
+                                        <th>Estado</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+        """
+        
+        for usuario in usuarios_list:
+            estado_badge = "success" if usuario.activo else "danger"
+            estado_texto = "Activo" if usuario.activo else "Inactivo"
+            rol_badge = {
+                'admin': 'danger',
+                'empleado': 'warning', 
+                'cliente': 'info'
+            }.get(usuario.rol, 'secondary')
+            
+            content += f"""
+                                    <tr>
+                                        <td>{usuario.id}</td>
+                                        <td>{usuario.nombre_completo}</td>
+                                        <td>{usuario.email}</td>
+                                        <td><span class="badge bg-{rol_badge}">{usuario.rol.title()}</span></td>
+                                        <td>{usuario.fecha_registro.strftime('%d/%m/%Y') if usuario.fecha_registro else 'N/A'}</td>
+                                        <td><span class="badge bg-{estado_badge}">{estado_texto}</span></td>
+                                        <td>
+                                            <a href="/usuarios/{usuario.id}/editar" class="btn btn-sm btn-primary">
+                                                <i class="fas fa-edit"></i>
+                                            </a>
+                                            <a href="/usuarios/{usuario.id}/toggle" class="btn btn-sm btn-{'danger' if usuario.activo else 'success'}" 
+                                               onclick="return confirm('¿Estás seguro?')">
+                                                <i class="fas fa-{'ban' if usuario.activo else 'check'}"></i>
+                                            </a>
+                                        </td>
+                                    </tr>
+            """
+        
+        content += """
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+    
+    @app.route('/usuarios/nuevo', methods=['GET', 'POST'])
+    @login_required
+    def nuevo_usuario():
+        if not current_user.is_admin():
+            flash('No tienes permisos para crear usuarios', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        if request.method == 'POST':
+            # Validar que el email no exista
+            email = request.form.get('email')
+            if Usuario.query.filter_by(email=email).first():
+                flash('El email ya está registrado', 'danger')
+                return redirect(url_for('nuevo_usuario'))
+            
+            usuario = Usuario(
+                nombre=request.form.get('nombre'),
+                apellido=request.form.get('apellido'),
+                email=email,
+                password_hash=generate_password_hash(request.form.get('password')),
+                rol=request.form.get('rol'),
+                activo=True
+            )
+            
+            db.session.add(usuario)
+            db.session.commit()
+            
+            flash('Usuario creado exitosamente', 'success')
+            return redirect(url_for('usuarios'))
+        
+        form_content = """
+        <h2><i class="fas fa-user-plus"></i> Nuevo Usuario</h2>
+        
+        <div class="row justify-content-center">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <form method="POST">
+                            <div class="mb-3">
+                                <label for="nombre" class="form-label">Nombre</label>
+                                <input type="text" class="form-control" id="nombre" name="nombre" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="apellido" class="form-label">Apellido</label>
+                                <input type="text" class="form-control" id="apellido" name="apellido" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="email" class="form-label">Email</label>
+                                <input type="email" class="form-control" id="email" name="email" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="password" class="form-label">Contraseña</label>
+                                <input type="password" class="form-control" id="password" name="password" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="rol" class="form-label">Rol</label>
+                                <select class="form-control" id="rol" name="rol" required>
+                                    <option value="">Seleccionar rol...</option>
+                                    <option value="admin">Administrador</option>
+                                    <option value="empleado">Empleado</option>
+                                    <option value="cliente">Cliente</option>
+                                </select>
+                            </div>
+                            
+                            <div class="d-grid gap-2">
+                                <button type="submit" class="btn btn-success">
+                                    <i class="fas fa-save"></i> Crear Usuario
+                                </button>
+                                <a href="/usuarios" class="btn btn-secondary">
+                                    <i class="fas fa-arrow-left"></i> Volver
+                                </a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', form_content))
+    
+    @app.route('/usuarios/<int:user_id>/editar', methods=['GET', 'POST'])
+    @login_required
+    def editar_usuario(user_id):
+        if not current_user.is_admin():
+            flash('No tienes permisos para editar usuarios', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        usuario = Usuario.query.get_or_404(user_id)
+        
+        if request.method == 'POST':
+            # Validar que el email no exista en otro usuario
+            email = request.form.get('email')
+            existing_user = Usuario.query.filter_by(email=email).first()
+            if existing_user and existing_user.id != user_id:
+                flash('El email ya está registrado por otro usuario', 'danger')
+                return redirect(url_for('editar_usuario', user_id=user_id))
+            
+            usuario.nombre = request.form.get('nombre')
+            usuario.apellido = request.form.get('apellido')
+            usuario.email = email
+            usuario.rol = request.form.get('rol')
+            
+            # Solo cambiar contraseña si se proporciona una nueva
+            new_password = request.form.get('password')
+            if new_password:
+                usuario.password_hash = generate_password_hash(new_password)
+            
+            db.session.commit()
+            
+            flash('Usuario actualizado exitosamente', 'success')
+            return redirect(url_for('usuarios'))
+        
+        form_content = f"""
+        <h2><i class="fas fa-edit"></i> Editar Usuario</h2>
+        
+        <div class="row justify-content-center">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <form method="POST">
+                            <div class="mb-3">
+                                <label for="nombre" class="form-label">Nombre</label>
+                                <input type="text" class="form-control" id="nombre" name="nombre" value="{usuario.nombre}" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="apellido" class="form-label">Apellido</label>
+                                <input type="text" class="form-control" id="apellido" name="apellido" value="{usuario.apellido}" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="email" class="form-label">Email</label>
+                                <input type="email" class="form-control" id="email" name="email" value="{usuario.email}" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="password" class="form-label">Nueva Contraseña (dejar vacío para mantener actual)</label>
+                                <input type="password" class="form-control" id="password" name="password">
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="rol" class="form-label">Rol</label>
+                                <select class="form-control" id="rol" name="rol" required>
+                                    <option value="admin" {'selected' if usuario.rol == 'admin' else ''}>Administrador</option>
+                                    <option value="empleado" {'selected' if usuario.rol == 'empleado' else ''}>Empleado</option>
+                                    <option value="cliente" {'selected' if usuario.rol == 'cliente' else ''}>Cliente</option>
+                                </select>
+                            </div>
+                            
+                            <div class="d-grid gap-2">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-save"></i> Actualizar Usuario
+                                </button>
+                                <a href="/usuarios" class="btn btn-secondary">
+                                    <i class="fas fa-arrow-left"></i> Volver
+                                </a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', form_content))
+    
+    @app.route('/usuarios/<int:user_id>/toggle')
+    @login_required
+    def toggle_usuario(user_id):
+        if not current_user.is_admin():
+            flash('No tienes permisos para cambiar el estado de usuarios', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        usuario = Usuario.query.get_or_404(user_id)
+        
+        # No permitir desactivar al propio admin
+        if usuario.id == current_user.id and usuario.rol == 'admin':
+            flash('No puedes desactivar tu propia cuenta de administrador', 'warning')
+            return redirect(url_for('usuarios'))
+        
+        usuario.activo = not usuario.activo
+        db.session.commit()
+        
+        estado = "activado" if usuario.activo else "desactivado"
+        flash(f'Usuario {estado} exitosamente', 'success')
+        
+        return redirect(url_for('usuarios'))
+    
     # Inicializar base de datos y datos básicos
     with app.app_context():
         try:
@@ -2264,6 +2993,25 @@ try:
                     rol='admin'
                 )
                 db.session.add(admin)
+                
+                # Usuarios de ejemplo
+                empleado = Usuario(
+                    nombre='Juan',
+                    apellido='Pérez',
+                    email='empleado@inia.gob.pe',
+                    password_hash=generate_password_hash('empleado123'),
+                    rol='empleado'
+                )
+                db.session.add(empleado)
+                
+                cliente = Usuario(
+                    nombre='María',
+                    apellido='González',
+                    email='cliente@example.com',
+                    password_hash=generate_password_hash('cliente123'),
+                    rol='cliente'
+                )
+                db.session.add(cliente)
                 
                 # Razas básicas
                 razas = [
@@ -2295,6 +3043,286 @@ try:
     print("📧 Credenciales: admin@inia.gob.pe / admin123")
     print("🌐 URL: http://localhost:5000")
     
+    # ========== RUTAS ADICIONALES ==========
+    @app.route('/admin/ventas')
+    @login_required
+    def admin_ventas():
+        # Solo admin y empleado pueden acceder
+        if not (current_user.is_admin() or current_user.is_empleado()):
+            flash('No tienes permisos para acceder a esta sección', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        # Obtener todas las ventas con información de cliente y cuy
+        ventas = db.session.query(Venta).join(Usuario, Venta.cliente_id == Usuario.id).join(Cuy).all()
+        
+        content = f"""
+        <div class='d-flex justify-content-between align-items-center mb-4'>
+            <h2><i class='fas fa-chart-line'></i> Gestión de Ventas</h2>
+            <div>
+                <span class='badge bg-info me-2'>Total: {len(ventas)}</span>
+                <span class='badge bg-warning me-2'>Pendientes: {len([v for v in ventas if v.estado == 'pendiente'])}</span>
+                <span class='badge bg-success'>Completadas: {len([v for v in ventas if v.estado == 'completada'])}</span>
+            </div>
+        </div>
+        
+        <div class='card'>
+            <div class='card-body'>
+                <div class='table-responsive'>
+                    <table class='table table-striped'>
+                        <thead class='table-dark'>
+                            <tr>
+                                <th>ID</th>
+                                <th>Fecha</th>
+                                <th>Cliente</th>
+                                <th>Cuy</th>
+                                <th>Precio</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        """
+        
+        for venta in ventas:
+            fecha = venta.fecha_venta.strftime('%d/%m/%Y') if venta.fecha_venta else 'N/A'
+            cliente_nombre = f"{venta.cliente.nombre} {venta.cliente.apellido}" if venta.cliente else 'N/A'
+            cuy_codigo = venta.cuy.codigo if venta.cuy else 'N/A'
+            
+            estado_class = {
+                'pendiente': 'warning',
+                'completada': 'success',
+                'cancelada': 'danger'
+            }.get(venta.estado, 'secondary')
+            
+            content += f"""
+                            <tr>
+                                <td>#{venta.id}</td>
+                                <td>{fecha}</td>
+                                <td>{cliente_nombre}</td>
+                                <td>{cuy_codigo}</td>
+                                <td>S/ {venta.precio:.2f}</td>
+                                <td><span class='badge bg-{estado_class}'>{venta.estado.title()}</span></td>
+                                <td>
+            """
+            
+            if venta.estado == 'pendiente':
+                content += f"""
+                                    <a href='/admin/ventas/{venta.id}/completar' class='btn btn-sm btn-success me-1'>
+                                        <i class='fas fa-check'></i> Completar
+                                    </a>
+                                    <a href='/admin/ventas/{venta.id}/cancelar' class='btn btn-sm btn-danger'>
+                                        <i class='fas fa-times'></i> Cancelar
+                                    </a>
+                """
+            else:
+                content += f"""
+                                    <span class='text-muted'>
+                                        <i class='fas fa-lock'></i> {venta.estado.title()}
+                                    </span>
+                """
+            
+            content += """
+                                </td>
+                            </tr>
+            """
+        
+        if not ventas:
+            content += """
+                            <tr>
+                                <td colspan='7' class='text-center text-muted'>
+                                    <i class='fas fa-info-circle'></i> No hay ventas registradas
+                                </td>
+                            </tr>
+            """
+        
+        content += """
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <div class='mt-3'>
+            <a href='/dashboard' class='btn btn-secondary'>
+                <i class='fas fa-arrow-left'></i> Volver al Dashboard
+            </a>
+        </div>
+        """
+        
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+    
+    @app.route('/admin/ventas/<int:venta_id>/completar')
+    @login_required
+    def completar_venta(venta_id):
+        if not (current_user.is_admin() or current_user.is_empleado()):
+            flash('No tienes permisos para esta acción', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        venta = Venta.query.get_or_404(venta_id)
+        
+        if venta.estado == 'pendiente':
+            venta.estado = 'completada'
+            db.session.commit()
+            flash(f'Venta #{venta.id} marcada como completada', 'success')
+        else:
+            flash('Esta venta ya no puede ser modificada', 'warning')
+        
+        return redirect(url_for('admin_ventas'))
+    
+    @app.route('/admin/ventas/<int:venta_id>/cancelar')
+    @login_required
+    def cancelar_venta(venta_id):
+        if not (current_user.is_admin() or current_user.is_empleado()):
+            flash('No tienes permisos para esta acción', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        venta = Venta.query.get_or_404(venta_id)
+        
+        if venta.estado == 'pendiente':
+            venta.estado = 'cancelada'
+            # Devolver el cuy al estado disponible
+            if venta.cuy:
+                venta.cuy.estado = 'sano'
+            db.session.commit()
+            flash(f'Venta #{venta.id} cancelada y cuy devuelto al inventario', 'success')
+        else:
+            flash('Esta venta ya no puede ser modificada', 'warning')
+        
+        return redirect(url_for('admin_ventas'))
+    
+    @app.route('/perfil')
+    @login_required
+    def perfil():
+        content = f"""
+        <div class='row justify-content-center'>
+            <div class='col-md-8'>
+                <div class='card'>
+                    <div class='card-header bg-primary text-white'>
+                        <h4><i class='fas fa-user'></i> Mi Perfil</h4>
+                    </div>
+                    <div class='card-body'>
+                        <div class='row'>
+                            <div class='col-md-6'>
+                                <p><strong>Nombre:</strong> {current_user.nombre}</p>
+                                <p><strong>Apellido:</strong> {current_user.apellido}</p>
+                                <p><strong>Email:</strong> {current_user.email}</p>
+                            </div>
+                            <div class='col-md-6'>
+                                <p><strong>Rol:</strong> <span class='badge bg-info'>{current_user.rol.title()}</span></p>
+                                <p><strong>Teléfono:</strong> {current_user.telefono or 'No registrado'}</p>
+                                <p><strong>Estado:</strong> <span class='badge bg-success'>Activo</span></p>
+                            </div>
+                        </div>
+                        
+                        {f"<p><strong>Dirección:</strong> {current_user.direccion}</p>" if current_user.direccion else ""}
+                        
+                        <hr>
+                        <div class='d-grid gap-2 d-md-flex justify-content-md-end'>
+                            <a href='/perfil/editar' class='btn btn-primary'>
+                                <i class='fas fa-edit'></i> Editar Perfil
+                            </a>
+                            <a href='/dashboard' class='btn btn-secondary'>
+                                <i class='fas fa-arrow-left'></i> Volver
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+    
+    @app.route('/perfil/editar', methods=['GET', 'POST'])
+    @login_required
+    def editar_perfil():
+        if request.method == 'POST':
+            # Actualizar datos del perfil
+            current_user.nombre = request.form.get('nombre', current_user.nombre)
+            current_user.apellido = request.form.get('apellido', current_user.apellido)
+            current_user.telefono = request.form.get('telefono', current_user.telefono)
+            current_user.direccion = request.form.get('direccion', current_user.direccion)
+            
+            # Cambiar contraseña si se proporciona
+            nueva_password = request.form.get('nueva_password')
+            if nueva_password and len(nueva_password) >= 6:
+                current_user.password_hash = generate_password_hash(nueva_password)
+            
+            db.session.commit()
+            flash('Perfil actualizado correctamente', 'success')
+            return redirect(url_for('perfil'))
+        
+        content = f"""
+        <div class='row justify-content-center'>
+            <div class='col-md-8'>
+                <div class='card'>
+                    <div class='card-header bg-primary text-white'>
+                        <h4><i class='fas fa-user-edit'></i> Editar Perfil</h4>
+                    </div>
+                    <div class='card-body'>
+                        <form method='POST'>
+                            <div class='row'>
+                                <div class='col-md-6 mb-3'>
+                                    <label for='nombre' class='form-label'>Nombre *</label>
+                                    <input type='text' class='form-control' id='nombre' name='nombre' 
+                                           value='{current_user.nombre}' required>
+                                </div>
+                                <div class='col-md-6 mb-3'>
+                                    <label for='apellido' class='form-label'>Apellido *</label>
+                                    <input type='text' class='form-control' id='apellido' name='apellido' 
+                                           value='{current_user.apellido}' required>
+                                </div>
+                            </div>
+                            
+                            <div class='mb-3'>
+                                <label for='email' class='form-label'>Email</label>
+                                <input type='email' class='form-control' id='email' value='{current_user.email}' disabled>
+                                <div class='form-text'>El email no puede ser modificado</div>
+                            </div>
+                            
+                            <div class='row'>
+                                <div class='col-md-6 mb-3'>
+                                    <label for='telefono' class='form-label'>Teléfono</label>
+                                    <input type='tel' class='form-control' id='telefono' name='telefono' 
+                                           value='{current_user.telefono or ""}'>
+                                </div>
+                                <div class='col-md-6 mb-3'>
+                                    <label for='rol' class='form-label'>Rol</label>
+                                    <input type='text' class='form-control' value='{current_user.rol.title()}' disabled>
+                                </div>
+                            </div>
+                            
+                            <div class='mb-3'>
+                                <label for='direccion' class='form-label'>Dirección</label>
+                                <textarea class='form-control' id='direccion' name='direccion' rows='2'>{current_user.direccion or ""}</textarea>
+                            </div>
+                            
+                            <hr>
+                            <h5>Cambiar Contraseña (Opcional)</h5>
+                            <div class='mb-3'>
+                                <label for='nueva_password' class='form-label'>Nueva Contraseña</label>
+                                <input type='password' class='form-control' id='nueva_password' name='nueva_password' 
+                                       minlength='6' placeholder='Dejar vacío si no desea cambiar'>
+                                <div class='form-text'>Mínimo 6 caracteres</div>
+                            </div>
+                            
+                            <div class='d-grid gap-2 d-md-flex justify-content-md-end'>
+                                <a href='/perfil' class='btn btn-secondary me-md-2'>
+                                    <i class='fas fa-times'></i> Cancelar
+                                </a>
+                                <button type='submit' class='btn btn-primary'>
+                                    <i class='fas fa-save'></i> Guardar Cambios
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+
     # Ejecutar servidor
     app.run(debug=True, host='127.0.0.1', port=5000)
     
