@@ -274,7 +274,7 @@ try:
     
     import os
     from datetime import datetime, date
-    from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, render_template_string
+    from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, render_template_string, make_response, send_file
     from flask_sqlalchemy import SQLAlchemy
     from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
     from werkzeug.security import generate_password_hash, check_password_hash
@@ -282,6 +282,16 @@ try:
     from wtforms import StringField, PasswordField, SelectField, FloatField, TextAreaField, DateField, BooleanField, IntegerField
     from wtforms.validators import DataRequired, Email, Length
     from templates_extra import CUYES_TEMPLATE, FORM_TEMPLATE, BASE_TEMPLATE
+    
+    # Importaciones para generar PDF y Excel
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    import pandas as pd
+    import tempfile
+    import io
     
     # Crear aplicación Flask
     app = Flask(__name__)
@@ -479,6 +489,7 @@ try:
         sexo = SelectField('Sexo', choices=[('macho', 'Macho'), ('hembra', 'Hembra')])
         peso_actual = FloatField('Peso (kg)', validators=[DataRequired()])
         precio_venta = FloatField('Precio de Venta (S/.)')
+        fecha_nacimiento = DateField('Fecha de Nacimiento', default=datetime.today)
         raza_id = SelectField('Raza', coerce=int)
         poza_id = SelectField('Poza', coerce=int)
         observaciones = TextAreaField('Observaciones')
@@ -990,6 +1001,7 @@ try:
                 sexo=form.sexo.data,
                 peso_actual=form.peso_actual.data,
                 precio_venta=form.precio_venta.data,
+                fecha_nacimiento=form.fecha_nacimiento.data,
                 raza_id=form.raza_id.data,
                 poza_id=form.poza_id.data,
                 observaciones=form.observaciones.data
@@ -1147,12 +1159,16 @@ try:
                                 <td>{venta.cuy.codigo if venta.cuy else 'N/A'}</td>
                                 <td>S/ {venta.precio:.2f}</td>
                                 <td>
-                                    <span class='badge bg-{'success' if venta.estado == 'completado' else 'warning' if venta.estado == 'pendiente' else 'danger'}'>
+                                    <span class='badge bg-{'success' if venta.estado == 'completada' else 'warning' if venta.estado == 'pendiente' else 'danger'}'>
                                         {venta.estado.title()}
                                     </span>
                                 </td>
                                 <td>
-                                    <a href='/ventas/{venta.id}' class='btn btn-sm btn-primary'>Ver</a>
+                                    <div class='btn-group' role='group'>
+                                        <a href='/ventas/{venta.id}' class='btn btn-sm btn-primary'>Ver</a>
+                                        {f'<form method="POST" action="/venta/{venta.id}/completar" style="display:inline;"><button type="submit" class="btn btn-sm btn-success" onclick="return confirm(\'¿Marcar como completada?\')">Completar</button></form>' if venta.estado == 'pendiente' else ''}
+                                        {f'<form method="POST" action="/venta/{venta.id}/cancelar" style="display:inline;"><button type="submit" class="btn btn-sm btn-danger" onclick="return confirm(\'¿Cancelar venta?\')">Cancelar</button></form>' if venta.estado == 'pendiente' else ''}
+                                    </div>
                                 </td>
                             </tr>
             """
@@ -1170,6 +1186,39 @@ try:
         """
         
         return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+    
+    @app.route('/venta/<int:venta_id>/completar', methods=['POST'])
+    @login_required
+    def completar_venta(venta_id):
+        if not (current_user.is_admin() or current_user.is_empleado()):
+            flash('No tienes permisos para esta acción', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        venta = Venta.query.get_or_404(venta_id)
+        venta.estado = 'completada'
+        db.session.commit()
+        flash('Venta marcada como completada exitosamente', 'success')
+        return redirect(url_for('ventas'))
+    
+    @app.route('/venta/<int:venta_id>/cancelar', methods=['POST'])
+    @login_required
+    def cancelar_venta(venta_id):
+        if not (current_user.is_admin() or current_user.is_empleado()):
+            flash('No tienes permisos para esta acción', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        venta = Venta.query.get_or_404(venta_id)
+        if venta.estado == 'completada':
+            flash('No se puede cancelar una venta ya completada', 'warning')
+            return redirect(url_for('ventas'))
+        
+        venta.estado = 'cancelada'
+        # Si había un cuy asignado, devolverlo al inventario
+        if venta.cuy:
+            venta.cuy.estado = 'sano'
+        db.session.commit()
+        flash('Venta cancelada exitosamente', 'success')
+        return redirect(url_for('ventas'))
     
     @app.route('/catalogo')
     def catalogo():
@@ -1356,7 +1405,7 @@ try:
                                 <td>{compra.cuy.codigo if compra.cuy else 'N/A'}</td>
                                 <td>S/ {compra.precio:.2f}</td>
                                 <td>
-                                    <span class='badge bg-{'success' if compra.estado == 'completado' else 'warning' if compra.estado == 'pendiente' else 'danger'}'>
+                                    <span class='badge bg-{'success' if compra.estado == 'completada' else 'warning' if compra.estado == 'pendiente' else 'danger'}'>
                                         {compra.estado.title()}
                                     </span>
                                 </td>
@@ -1471,9 +1520,10 @@ try:
                             <a href='/mis-compras' class='btn btn-secondary me-md-2'>
                                 <i class='fas fa-arrow-left'></i> Volver a Mis Compras
                             </a>
-                            <a href='/catalogo' class='btn btn-primary'>
+                            <a href='/catalogo' class='btn btn-primary me-md-2'>
                                 <i class='fas fa-shopping-cart'></i> Seguir Comprando
                             </a>
+                            {f'<a href="/factura/{compra.id}" class="btn btn-success"><i class="fas fa-download"></i> Descargar Factura</a>' if compra.estado == 'completada' else ''}
                         </div>
                     </div>
                 </div>
@@ -1482,6 +1532,226 @@ try:
         """
         
         return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+    
+    @app.route('/factura/<int:compra_id>')
+    @login_required
+    def descargar_factura(compra_id):
+        if not current_user.is_cliente():
+            flash('Acceso denegado', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        # Verificar que la compra pertenece al cliente actual y está completada
+        compra = Venta.query.filter_by(id=compra_id, cliente_id=current_user.id).first_or_404()
+        
+        if compra.estado != 'completada':
+            flash('Solo puedes descargar facturas de compras completadas', 'warning')
+            return redirect(url_for('detalle_compra', compra_id=compra_id))
+        
+        # Crear el documento PDF para la factura
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.8*inch, bottomMargin=0.8*inch)
+        
+        # Estilos
+        styles = getSampleStyleSheet()
+        
+        # Estilo para el título de la factura
+        title_style = ParagraphStyle(
+            'FacturaTitle',
+            parent=styles['Title'],
+            fontSize=22,
+            textColor=colors.darkgreen,
+            spaceAfter=20,
+            alignment=1  # Center
+        )
+        
+        # Estilo para información de la empresa
+        empresa_style = ParagraphStyle(
+            'EmpresaStyle',
+            parent=styles['Normal'],
+            fontSize=12,
+            textColor=colors.darkblue,
+            spaceAfter=15,
+            alignment=1  # Center
+        )
+        
+        # Estilo para datos de la factura
+        info_style = ParagraphStyle(
+            'InfoStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            spaceAfter=10
+        )
+        
+        # Estilo para totales
+        total_style = ParagraphStyle(
+            'TotalStyle',
+            parent=styles['Normal'],
+            fontSize=12,
+            textColor=colors.darkgreen,
+            spaceAfter=10
+        )
+        
+        # Contenido del documento
+        story = []
+        
+        # Encabezado de la empresa
+        empresa_info = """
+        <b>INSTITUTO NACIONAL DE INNOVACIÓN AGRARIA</b><br/>
+        <b>INIA - ANDAHUAYLAS</b><br/>
+        Sistema de Gestión de Cuyes<br/>
+        RUC: 20123456789<br/>
+        Teléfono: (083) 123-456<br/>
+        Email: cuyes@inia.gob.pe
+        """
+        empresa_para = Paragraph(empresa_info, empresa_style)
+        story.append(empresa_para)
+        story.append(Spacer(1, 20))
+        
+        # Título de la factura
+        title = Paragraph(f"FACTURA ELECTRÓNICA N° {compra.id:06d}", title_style)
+        story.append(title)
+        story.append(Spacer(1, 20))
+        
+        # Información del cliente y factura
+        fecha_actual = datetime.now().strftime('%d/%m/%Y %H:%M')
+        fecha_venta = compra.fecha_venta.strftime('%d/%m/%Y') if compra.fecha_venta else 'N/A'
+        
+        # Crear tabla con información del cliente y factura
+        client_data = [
+            ['DATOS DEL CLIENTE', 'DATOS DE LA FACTURA'],
+            [f'Nombre: {current_user.nombre} {current_user.apellido}', f'Fecha de Emisión: {fecha_actual}'],
+            [f'Email: {current_user.email}', f'Fecha de Venta: {fecha_venta}'],
+            [f'Teléfono: {current_user.telefono or "No registrado"}', f'Método de Pago: {compra.metodo_pago.title()}'],
+            [f'Dirección: {current_user.direccion or "No registrada"}', f'Estado: {compra.estado.title()}']
+        ]
+        
+        client_table = Table(client_data, colWidths=[3*inch, 3*inch])
+        client_table.setStyle(TableStyle([
+            # Encabezados
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            
+            # Contenido
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 1), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+        ]))
+        
+        story.append(client_table)
+        story.append(Spacer(1, 30))
+        
+        # Detalles del producto
+        detalle_title = Paragraph("<b>DETALLE DE LA COMPRA</b>", info_style)
+        story.append(detalle_title)
+        story.append(Spacer(1, 10))
+        
+        # Tabla de productos
+        product_data = [
+            ['Descripción', 'Código', 'Raza', 'Sexo', 'Peso (kg)', 'Precio Unit.', 'Cantidad', 'Total']
+        ]
+        
+        # Datos del cuy
+        cuy_descripcion = f"Cuy {compra.cuy.codigo}" if compra.cuy else "Cuy N/A"
+        cuy_codigo = compra.cuy.codigo if compra.cuy else "N/A"
+        cuy_raza = compra.cuy.raza_obj.nombre if compra.cuy and compra.cuy.raza_obj else "N/A"
+        cuy_sexo = compra.cuy.sexo.title() if compra.cuy else "N/A"
+        cuy_peso = f"{compra.peso_venta:.2f}" if compra.peso_venta else (f"{compra.cuy.peso_actual:.2f}" if compra.cuy and compra.cuy.peso_actual else "N/A")
+        precio_unitario = f"S/ {compra.precio:.2f}"
+        cantidad = "1"
+        total_item = f"S/ {compra.precio:.2f}"
+        
+        product_data.append([
+            cuy_descripcion,
+            cuy_codigo,
+            cuy_raza,
+            cuy_sexo,
+            cuy_peso,
+            precio_unitario,
+            cantidad,
+            total_item
+        ])
+        
+        product_table = Table(product_data, repeatRows=1)
+        product_table.setStyle(TableStyle([
+            # Encabezados
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkgreen),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            
+            # Contenido
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 1), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+        ]))
+        
+        story.append(product_table)
+        story.append(Spacer(1, 30))
+        
+        # Resumen de totales
+        total_data = [
+            ['', 'SUBTOTAL:', f'S/ {compra.precio:.2f}'],
+            ['', 'IGV (18%):', f'S/ {compra.precio * 0.18:.2f}'],
+            ['', 'TOTAL A PAGAR:', f'S/ {compra.precio * 1.18:.2f}']
+        ]
+        
+        total_table = Table(total_data, colWidths=[3*inch, 1.5*inch, 1.5*inch])
+        total_table.setStyle(TableStyle([
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (1, 0), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (1, 0), (-1, -1), 12),
+            ('TEXTCOLOR', (1, 2), (-1, 2), colors.darkgreen),
+            ('FONTSIZE', (1, 2), (-1, 2), 14),
+            ('LINEABOVE', (1, 2), (-1, 2), 2, colors.darkgreen),
+            ('TOPPADDING', (1, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (1, 0), (-1, -1), 8),
+        ]))
+        
+        story.append(total_table)
+        story.append(Spacer(1, 40))
+        
+        # Nota final
+        nota_text = """
+        <b>NOTA IMPORTANTE:</b><br/>
+        Esta factura corresponde a la compra de cuy de calidad genética del INIA Andahuaylas.
+        El producto ha sido criado bajo estrictos controles sanitarios y de alimentación.
+        Para cualquier consulta, comuníquese con nosotros a través de los medios de contacto indicados.
+        """
+        nota_para = Paragraph(nota_text, info_style)
+        story.append(nota_para)
+        
+        # Pie de página
+        story.append(Spacer(1, 20))
+        pie_text = f"<i>Factura generada electrónicamente el {fecha_actual} - Sistema INIA Cuyes v1.0</i>"
+        pie_para = Paragraph(pie_text, ParagraphStyle('Pie', parent=styles['Normal'], fontSize=8, alignment=1, textColor=colors.grey))
+        story.append(pie_para)
+        
+        # Generar el PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'factura_{compra.id:06d}_{datetime.now().strftime("%Y%m%d")}.pdf',
+            mimetype='application/pdf'
+        )
     
     @app.route('/reportes')
     @login_required
@@ -1591,62 +1861,97 @@ try:
             flash('No tienes permisos para generar reportes', 'danger')
             return redirect(url_for('dashboard'))
         
+        # Obtener datos de cuyes
         cuyes = Cuy.query.all()
         
-        content = f"""
-        <h2>Reporte de Cuyes - PDF</h2>
-        <div class='alert alert-info'>
-            <strong>Fecha del reporte:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}<br>
-            <strong>Total de cuyes:</strong> {len(cuyes)}
-        </div>
+        # Crear el documento PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*inch)
         
-        <div class='table-responsive'>
-            <table class='table table-striped'>
-                <thead class='table-dark'>
-                    <tr>
-                        <th>ID</th>
-                        <th>Número</th>
-                        <th>Raza</th>
-                        <th>Género</th>
-                        <th>Peso (g)</th>
-                        <th>Estado</th>
-                        <th>Poza</th>
-                        <th>Fecha Nacimiento</th>
-                    </tr>
-                </thead>
-                <tbody>
-        """
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Title'],
+            fontSize=18,
+            textColor=colors.darkblue,
+            spaceAfter=30,
+            alignment=1  # Center
+        )
+        
+        # Contenido del documento
+        story = []
+        
+        # Título
+        title = Paragraph("REPORTE DE CUYES - INIA ANDAHUAYLAS", title_style)
+        story.append(title)
+        
+        # Información del reporte
+        info_style = ParagraphStyle(
+            'InfoStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            spaceAfter=20
+        )
+        fecha_actual = datetime.now().strftime('%d/%m/%Y %H:%M')
+        info_text = f"<b>Fecha del reporte:</b> {fecha_actual}<br/><b>Total de cuyes:</b> {len(cuyes)}"
+        info_para = Paragraph(info_text, info_style)
+        story.append(info_para)
+        story.append(Spacer(1, 12))
+        
+        # Crear tabla de datos
+        data = [['ID', 'Código', 'Raza', 'Sexo', 'Peso (kg)', 'Estado', 'Poza', 'Fecha Nac.']]
         
         for cuy in cuyes:
-            estado_badge = "success" if cuy.estado == "disponible" else "warning" if cuy.estado == "en_tratamiento" else "danger"
-            poza_nombre = cuy.poza.nombre if cuy.poza else "Sin asignar"
+            poza_nombre = cuy.poza.codigo if cuy.poza else "Sin asignar"
             fecha_nac = cuy.fecha_nacimiento.strftime('%d/%m/%Y') if cuy.fecha_nacimiento else "No registrada"
+            raza_nombre = cuy.raza_obj.nombre if cuy.raza_obj else (cuy.raza or "N/A")
+            peso = f"{cuy.peso_actual:.2f}" if cuy.peso_actual else "N/A"
             
-            content += f"""
-                    <tr>
-                        <td>{cuy.id}</td>
-                        <td>{cuy.numero}</td>
-                        <td>{cuy.raza}</td>
-                        <td>{cuy.genero}</td>
-                        <td>{cuy.peso}</td>
-                        <td><span class='badge bg-{estado_badge}'>{cuy.estado.replace('_', ' ').title()}</span></td>
-                        <td>{poza_nombre}</td>
-                        <td>{fecha_nac}</td>
-                    </tr>
-            """
+            data.append([
+                str(cuy.id),
+                cuy.codigo or "N/A",
+                raza_nombre,
+                cuy.sexo.title(),
+                peso,
+                cuy.estado.replace('_', ' ').title(),
+                poza_nombre,
+                fecha_nac
+            ])
         
-        content += """
-                </tbody>
-            </table>
-        </div>
+        # Crear y estilizar la tabla
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            # Encabezados
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            
+            # Contenido
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            
+            # Alternar colores de filas
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.beige, colors.white])
+        ]))
         
-        <div class='mt-3'>
-            <a href='/reportes' class='btn btn-secondary'>Volver a Reportes</a>
-            <button onclick='window.print()' class='btn btn-primary'>Imprimir</button>
-        </div>
-        """
+        story.append(table)
         
-        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+        # Generar el PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'reporte_cuyes_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
+            mimetype='application/pdf'
+        )
     
     @app.route('/reportes/cuyes/excel')
     @login_required
@@ -1655,80 +1960,118 @@ try:
             flash('No tienes permisos para generar reportes', 'danger')
             return redirect(url_for('dashboard'))
         
+        # Obtener datos de cuyes
         cuyes = Cuy.query.all()
         
-        # Simulación de exportación Excel (datos en formato tabla)
-        content = f"""
-        <h2>Datos para Exportación Excel - Cuyes</h2>
-        <div class='alert alert-success'>
-            <i class='fas fa-download'></i>
-            <strong>Datos preparados para exportación</strong><br>
-            Total de registros: {len(cuyes)}
-        </div>
-        
-        <div class='table-responsive'>
-            <table class='table table-bordered table-sm'>
-                <thead class='table-success'>
-                    <tr>
-                        <th>ID</th>
-                        <th>Numero</th>
-                        <th>Raza</th>
-                        <th>Genero</th>
-                        <th>Peso_g</th>
-                        <th>Estado</th>
-                        <th>Poza</th>
-                        <th>Fecha_Nacimiento</th>
-                    </tr>
-                </thead>
-                <tbody>
-        """
-        
+        # Preparar datos para el DataFrame
+        data = []
         for cuy in cuyes:
-            poza_nombre = cuy.poza.nombre if cuy.poza else "Sin_asignar"
-            fecha_nac = cuy.fecha_nacimiento.strftime('%Y-%m-%d') if cuy.fecha_nacimiento else "No_registrada"
+            poza_nombre = cuy.poza.codigo if cuy.poza else "Sin asignar"
+            fecha_nac = cuy.fecha_nacimiento.strftime('%d/%m/%Y') if cuy.fecha_nacimiento else "No registrada"
+            fecha_registro = cuy.fecha_registro.strftime('%d/%m/%Y') if cuy.fecha_registro else "No registrada"
+            raza_nombre = cuy.raza_obj.nombre if cuy.raza_obj else (cuy.raza or "N/A")
+            peso = cuy.peso_actual if cuy.peso_actual else 0
             
-            content += f"""
-                    <tr>
-                        <td>{cuy.id}</td>
-                        <td>{cuy.numero}</td>
-                        <td>{cuy.raza}</td>
-                        <td>{cuy.genero}</td>
-                        <td>{cuy.peso}</td>
-                        <td>{cuy.estado}</td>
-                        <td>{poza_nombre}</td>
-                        <td>{fecha_nac}</td>
-                    </tr>
-            """
+            data.append({
+                'ID': cuy.id,
+                'Código': cuy.codigo or "N/A",
+                'Raza': raza_nombre,
+                'Sexo': cuy.sexo.title(),
+                'Peso (kg)': peso,
+                'Estado': cuy.estado.replace('_', ' ').title(),
+                'Poza': poza_nombre,
+                'Fecha Nacimiento': fecha_nac,
+                'Fecha Registro': fecha_registro,
+                'Observaciones': cuy.observaciones or "Ninguna"
+            })
         
-        content += """
-                </tbody>
-            </table>
-        </div>
+        # Crear DataFrame
+        df = pd.DataFrame(data)
         
-        <div class='alert alert-info'>
-            <i class='fas fa-info-circle'></i>
-            <strong>Instrucciones:</strong> Copia esta tabla y pégala en Excel para crear tu hoja de cálculo.
-        </div>
+        # Crear buffer para el archivo Excel
+        buffer = io.BytesIO()
         
-        <div class='mt-3'>
-            <a href='/reportes' class='btn btn-secondary'>Volver a Reportes</a>
-            <button onclick='selectTable()' class='btn btn-success'>Seleccionar Datos</button>
-        </div>
+        # Crear el archivo Excel con formato
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            # Escribir los datos
+            df.to_excel(writer, sheet_name='Reporte_Cuyes', index=False)
+            
+            # Obtener el workbook y worksheet para aplicar formato
+            workbook = writer.book
+            worksheet = writer.sheets['Reporte_Cuyes']
+            
+            # Aplicar formato al encabezado
+            from openpyxl.styles import Font, PatternFill, Alignment
+            
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            
+            for cell in worksheet[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center")
+            
+            # Ajustar ancho de columnas
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+            
+            # Agregar información del reporte en una hoja separada
+            info_data = {
+                'Información del Reporte': [
+                    'Fecha de generación',
+                    'Total de cuyes',
+                    'Cuyes disponibles',
+                    'Cuyes en tratamiento',
+                    'Generado por'
+                ],
+                'Valor': [
+                    datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
+                    len(cuyes),
+                    len([c for c in cuyes if c.estado == 'sano']),
+                    len([c for c in cuyes if c.estado == 'en_tratamiento']),
+                    f"{current_user.nombre} {current_user.apellido}"
+                ]
+            }
+            
+            info_df = pd.DataFrame(info_data)
+            info_df.to_excel(writer, sheet_name='Información', index=False)
+            
+            # Formatear hoja de información
+            info_sheet = writer.sheets['Información']
+            for cell in info_sheet[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center")
+            
+            for column in info_sheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                info_sheet.column_dimensions[column_letter].width = adjusted_width
         
-        <script>
-        function selectTable() {
-            const table = document.querySelector('.table-responsive table');
-            const range = document.createRange();
-            range.selectNodeContents(table);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
-            alert('Datos seleccionados. Presiona Ctrl+C para copiar y luego pega en Excel.');
-        }
-        </script>
-        """
+        buffer.seek(0)
         
-        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'reporte_cuyes_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
     
     @app.route('/reportes/ventas/pdf')
     @login_required
@@ -1737,61 +2080,96 @@ try:
             flash('No tienes permisos para generar reportes', 'danger')
             return redirect(url_for('dashboard'))
         
+        # Obtener datos de ventas
         ventas = Venta.query.order_by(Venta.fecha_venta.desc()).all()
-        total_ingresos = sum(venta.total for venta in ventas)
+        total_ingresos = sum(venta.precio for venta in ventas if venta.precio and venta.estado == 'completada')
         
-        content = f"""
-        <h2>Reporte de Ventas - PDF</h2>
-        <div class='alert alert-info'>
-            <strong>Fecha del reporte:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}<br>
-            <strong>Total de ventas:</strong> {len(ventas)}<br>
-            <strong>Ingresos totales:</strong> S/ {total_ingresos:.2f}
-        </div>
+        # Crear el documento PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*inch)
         
-        <div class='table-responsive'>
-            <table class='table table-striped'>
-                <thead class='table-dark'>
-                    <tr>
-                        <th>ID</th>
-                        <th>Cliente</th>
-                        <th>Contacto</th>
-                        <th>Cantidad</th>
-                        <th>Total (S/)</th>
-                        <th>Estado</th>
-                        <th>Fecha</th>
-                    </tr>
-                </thead>
-                <tbody>
-        """
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Title'],
+            fontSize=18,
+            textColor=colors.darkgreen,
+            spaceAfter=30,
+            alignment=1  # Center
+        )
+        
+        # Contenido del documento
+        story = []
+        
+        # Título
+        title = Paragraph("REPORTE DE VENTAS - INIA ANDAHUAYLAS", title_style)
+        story.append(title)
+        
+        # Información del reporte
+        info_style = ParagraphStyle(
+            'InfoStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            spaceAfter=20
+        )
+        fecha_actual = datetime.now().strftime('%d/%m/%Y %H:%M')
+        info_text = f"<b>Fecha del reporte:</b> {fecha_actual}<br/><b>Total de ventas:</b> {len(ventas)}<br/><b>Ingresos totales:</b> S/ {total_ingresos:.2f}"
+        info_para = Paragraph(info_text, info_style)
+        story.append(info_para)
+        story.append(Spacer(1, 12))
+        
+        # Crear tabla de datos
+        data = [['ID', 'Cliente', 'Email', 'Teléfono', 'Cuy', 'Precio', 'Estado', 'Fecha']]
         
         for venta in ventas:
-            estado_badge = "success" if venta.estado == "completada" else "warning" if venta.estado == "pendiente" else "danger"
             fecha_venta = venta.fecha_venta.strftime('%d/%m/%Y') if venta.fecha_venta else "No registrada"
+            cuy_codigo = venta.cuy.codigo if venta.cuy else "N/A"
             
-            content += f"""
-                    <tr>
-                        <td>{venta.id}</td>
-                        <td>{venta.nombre_cliente}</td>
-                        <td>{venta.email_cliente}</td>
-                        <td>{venta.cantidad}</td>
-                        <td>S/ {venta.total:.2f}</td>
-                        <td><span class='badge bg-{estado_badge}'>{venta.estado.title()}</span></td>
-                        <td>{fecha_venta}</td>
-                    </tr>
-            """
+            data.append([
+                str(venta.id),
+                venta.nombre_cliente or "N/A",
+                venta.email_cliente or "N/A",
+                venta.telefono_cliente or "N/A",
+                cuy_codigo,
+                f"S/ {venta.precio:.2f}" if venta.precio else "N/A",
+                venta.estado.title(),
+                fecha_venta
+            ])
         
-        content += """
-                </tbody>
-            </table>
-        </div>
+        # Crear y estilizar la tabla
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            # Encabezados
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkgreen),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            
+            # Contenido
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            
+            # Alternar colores de filas
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.lightgreen, colors.white])
+        ]))
         
-        <div class='mt-3'>
-            <a href='/reportes' class='btn btn-secondary'>Volver a Reportes</a>
-            <button onclick='window.print()' class='btn btn-primary'>Imprimir</button>
-        </div>
-        """
+        story.append(table)
         
-        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+        # Generar el PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'reporte_ventas_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
+            mimetype='application/pdf'
+        )
     
     # Sistema de Control Sanitario
     @app.route('/controles')
@@ -2042,73 +2420,126 @@ try:
             flash('No tienes permisos para generar reportes', 'danger')
             return redirect(url_for('dashboard'))
         
+        # Obtener datos de ventas
         ventas = Venta.query.order_by(Venta.fecha_venta.desc()).all()
         
-        content = f"""
-        <h2>Datos para Exportación Excel - Ventas</h2>
-        <div class='alert alert-success'>
-            <i class='fas fa-download'></i>
-            <strong>Datos preparados para exportación</strong><br>
-            Total de registros: {len(ventas)}
-        </div>
-        
-        <div class='table-responsive'>
-            <table class='table table-bordered table-sm'>
-                <thead class='table-success'>
-                    <tr>
-                        <th>ID</th>
-                        <th>Nombre_Cliente</th>
-                        <th>Email_Cliente</th>
-                        <th>Telefono_Cliente</th>
-                        <th>Cantidad</th>
-                        <th>Total_Soles</th>
-                        <th>Estado</th>
-                        <th>Fecha_Venta</th>
-                    </tr>
-                </thead>
-                <tbody>
-        """
-        
+        # Preparar datos para el DataFrame
+        data = []
         for venta in ventas:
-            fecha_venta = venta.fecha_venta.strftime('%Y-%m-%d') if venta.fecha_venta else "No_registrada"
+            fecha_venta = venta.fecha_venta.strftime('%d/%m/%Y') if venta.fecha_venta else "No registrada"
+            cuy_codigo = venta.cuy.codigo if venta.cuy else "N/A"
             
-            content += f"""
-                    <tr>
-                        <td>{venta.id}</td>
-                        <td>{venta.nombre_cliente}</td>
-                        <td>{venta.email_cliente}</td>
-                        <td>{venta.telefono_cliente or 'No_registrado'}</td>
-                        <td>{venta.cantidad}</td>
-                        <td>{venta.total:.2f}</td>
-                        <td>{venta.estado}</td>
-                        <td>{fecha_venta}</td>
-                    </tr>
-            """
+            data.append({
+                'ID': venta.id,
+                'Cliente': venta.nombre_cliente or "N/A",
+                'Email': venta.email_cliente or "N/A",
+                'Teléfono': venta.telefono_cliente or "N/A",
+                'Cuy (Código)': cuy_codigo,
+                'Precio (S/)': venta.precio if venta.precio else 0,
+                'Peso Venta (kg)': venta.peso_venta if venta.peso_venta else 0,
+                'Método Pago': venta.metodo_pago.title() if venta.metodo_pago else "N/A",
+                'Estado': venta.estado.title(),
+                'Fecha Venta': fecha_venta,
+                'Fecha Registro': venta.fecha_registro.strftime('%d/%m/%Y') if venta.fecha_registro else "N/A",
+                'Vendido Por': venta.vendedor.nombre_completo if venta.vendedor else "N/A",
+                'Observaciones': venta.observaciones or "Ninguna"
+            })
         
-        content += """
-                </tbody>
-            </table>
-        </div>
+        # Crear DataFrame
+        df = pd.DataFrame(data)
         
-        <div class='mt-3'>
-            <a href='/reportes' class='btn btn-secondary'>Volver a Reportes</a>
-            <button onclick='selectTable()' class='btn btn-success'>Seleccionar Datos</button>
-        </div>
+        # Crear buffer para el archivo Excel
+        buffer = io.BytesIO()
         
-        <script>
-        function selectTable() {
-            const table = document.querySelector('.table-responsive table');
-            const range = document.createRange();
-            range.selectNodeContents(table);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
-            alert('Datos seleccionados. Presiona Ctrl+C para copiar y luego pega en Excel.');
-        }
-        </script>
-        """
+        # Crear el archivo Excel con formato
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            # Escribir los datos
+            df.to_excel(writer, sheet_name='Reporte_Ventas', index=False)
+            
+            # Obtener el workbook y worksheet para aplicar formato
+            workbook = writer.book
+            worksheet = writer.sheets['Reporte_Ventas']
+            
+            # Aplicar formato al encabezado
+            from openpyxl.styles import Font, PatternFill, Alignment
+            
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
+            
+            for cell in worksheet[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center")
+            
+            # Ajustar ancho de columnas
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+            
+            # Agregar resumen estadístico
+            total_ingresos = sum(v.precio for v in ventas if v.precio and v.estado == 'completada')
+            ventas_completadas = len([v for v in ventas if v.estado == 'completada'])
+            ventas_pendientes = len([v for v in ventas if v.estado == 'pendiente'])
+            
+            resumen_data = {
+                'Resumen de Ventas': [
+                    'Total de ventas',
+                    'Ventas completadas',
+                    'Ventas pendientes',
+                    'Ingresos totales (S/)',
+                    'Promedio por venta (S/)',
+                    'Fecha de generación',
+                    'Generado por'
+                ],
+                'Valor': [
+                    len(ventas),
+                    ventas_completadas,
+                    ventas_pendientes,
+                    f"{total_ingresos:.2f}",
+                    f"{total_ingresos/ventas_completadas:.2f}" if ventas_completadas > 0 else "0.00",
+                    datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
+                    f"{current_user.nombre} {current_user.apellido}"
+                ]
+            }
+            
+            resumen_df = pd.DataFrame(resumen_data)
+            resumen_df.to_excel(writer, sheet_name='Resumen', index=False)
+            
+            # Formatear hoja de resumen
+            resumen_sheet = writer.sheets['Resumen']
+            for cell in resumen_sheet[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center")
+            
+            for column in resumen_sheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                resumen_sheet.column_dimensions[column_letter].width = adjusted_width
         
-        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'reporte_ventas_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
     
     @app.route('/reportes/pozas/pdf')
     @login_required
@@ -2117,60 +2548,99 @@ try:
             flash('No tienes permisos para generar reportes', 'danger')
             return redirect(url_for('dashboard'))
         
+        # Obtener datos de pozas
         pozas = Poza.query.all()
         
-        content = f"""
-        <h2>Reporte de Pozas - PDF</h2>
-        <div class='alert alert-info'>
-            <strong>Fecha del reporte:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}<br>
-            <strong>Total de pozas:</strong> {len(pozas)}
-        </div>
+        # Crear el documento PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*inch)
         
-        <div class='table-responsive'>
-            <table class='table table-striped'>
-                <thead class='table-dark'>
-                    <tr>
-                        <th>ID</th>
-                        <th>Código</th>
-                        <th>Tipo</th>
-                        <th>Capacidad</th>
-                        <th>Cuyes Actuales</th>
-                        <th>Ocupación (%)</th>
-                        <th>Estado</th>
-                    </tr>
-                </thead>
-                <tbody>
-        """
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Title'],
+            fontSize=18,
+            textColor=colors.darkorange,
+            spaceAfter=30,
+            alignment=1  # Center
+        )
+        
+        # Contenido del documento
+        story = []
+        
+        # Título
+        title = Paragraph("REPORTE DE POZAS - INIA ANDAHUAYLAS", title_style)
+        story.append(title)
+        
+        # Información del reporte
+        info_style = ParagraphStyle(
+            'InfoStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            spaceAfter=20
+        )
+        fecha_actual = datetime.now().strftime('%d/%m/%Y %H:%M')
+        capacidad_total = sum(poza.capacidad for poza in pozas)
+        ocupacion_total = sum(len(poza.cuyes) for poza in pozas)
+        porcentaje_ocupacion = (ocupacion_total / capacidad_total * 100) if capacidad_total > 0 else 0
+        
+        info_text = f"<b>Fecha del reporte:</b> {fecha_actual}<br/><b>Total de pozas:</b> {len(pozas)}<br/><b>Capacidad total:</b> {capacidad_total} cuyes<br/><b>Ocupación actual:</b> {ocupacion_total} cuyes ({porcentaje_ocupacion:.1f}%)"
+        info_para = Paragraph(info_text, info_style)
+        story.append(info_para)
+        story.append(Spacer(1, 12))
+        
+        # Crear tabla de datos
+        data = [['ID', 'Código', 'Tipo', 'Capacidad', 'Ocupación', '% Ocupación', 'Estado']]
         
         for poza in pozas:
             cuyes_actuales = len(poza.cuyes)
             ocupacion = (cuyes_actuales / poza.capacidad * 100) if poza.capacidad > 0 else 0
-            estado_badge = "success" if ocupacion < 80 else "warning" if ocupacion < 100 else "danger"
+            estado = 'Disponible' if ocupacion < 100 else 'Llena'
             
-            content += f"""
-                    <tr>
-                        <td>{poza.id}</td>
-                        <td>{poza.codigo}</td>
-                        <td>{poza.tipo}</td>
-                        <td>{poza.capacidad}</td>
-                        <td>{cuyes_actuales}</td>
-                        <td><span class='badge bg-{estado_badge}'>{ocupacion:.1f}%</span></td>
-                        <td>{'Disponible' if ocupacion < 100 else 'Llena'}</td>
-                    </tr>
-            """
+            data.append([
+                str(poza.id),
+                poza.codigo,
+                poza.tipo.title(),
+                str(poza.capacidad),
+                str(cuyes_actuales),
+                f"{ocupacion:.1f}%",
+                estado
+            ])
         
-        content += """
-                </tbody>
-            </table>
-        </div>
+        # Crear y estilizar la tabla
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            # Encabezados
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkorange),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            
+            # Contenido
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            
+            # Alternar colores de filas
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.lightyellow, colors.white])
+        ]))
         
-        <div class='mt-3'>
-            <a href='/reportes' class='btn btn-secondary'>Volver a Reportes</a>
-            <button onclick='window.print()' class='btn btn-primary'>Imprimir</button>
-        </div>
-        """
+        story.append(table)
         
-        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+        # Generar el PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'reporte_pozas_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
+            mimetype='application/pdf'
+        )
     
     @app.route('/reportes/pozas/excel')
     @login_required
@@ -2179,73 +2649,128 @@ try:
             flash('No tienes permisos para generar reportes', 'danger')
             return redirect(url_for('dashboard'))
         
+        # Obtener datos de pozas
         pozas = Poza.query.all()
         
-        content = f"""
-        <h2>Datos para Exportación Excel - Pozas</h2>
-        <div class='alert alert-success'>
-            <i class='fas fa-download'></i>
-            <strong>Datos preparados para exportación</strong><br>
-            Total de registros: {len(pozas)}
-        </div>
-        
-        <div class='table-responsive'>
-            <table class='table table-bordered table-sm'>
-                <thead class='table-success'>
-                    <tr>
-                        <th>ID</th>
-                        <th>Codigo</th>
-                        <th>Tipo</th>
-                        <th>Capacidad</th>
-                        <th>Cuyes_Actuales</th>
-                        <th>Ocupacion_Porcentaje</th>
-                        <th>Estado</th>
-                    </tr>
-                </thead>
-                <tbody>
-        """
-        
+        # Preparar datos para el DataFrame
+        data = []
         for poza in pozas:
             cuyes_actuales = len(poza.cuyes)
             ocupacion = (cuyes_actuales / poza.capacidad * 100) if poza.capacidad > 0 else 0
             estado = 'Disponible' if ocupacion < 100 else 'Llena'
             
-            content += f"""
-                    <tr>
-                        <td>{poza.id}</td>
-                        <td>{poza.codigo}</td>
-                        <td>{poza.tipo}</td>
-                        <td>{poza.capacidad}</td>
-                        <td>{cuyes_actuales}</td>
-                        <td>{ocupacion:.1f}</td>
-                        <td>{estado}</td>
-                    </tr>
-            """
+            data.append({
+                'ID': poza.id,
+                'Código': poza.codigo,
+                'Nombre': poza.nombre or "Sin nombre",
+                'Tipo': poza.tipo.title(),
+                'Capacidad': poza.capacidad,
+                'Ocupación Actual': cuyes_actuales,
+                'Porcentaje Ocupación': f"{ocupacion:.1f}%",
+                'Estado': estado,
+                'Activa': 'Sí' if poza.activa else 'No',
+                'Descripción': poza.descripcion or "Sin descripción"
+            })
         
-        content += """
-                </tbody>
-            </table>
-        </div>
+        # Crear DataFrame
+        df = pd.DataFrame(data)
         
-        <div class='mt-3'>
-            <a href='/reportes' class='btn btn-secondary'>Volver a Reportes</a>
-            <button onclick='selectTable()' class='btn btn-success'>Seleccionar Datos</button>
-        </div>
+        # Crear buffer para el archivo Excel
+        buffer = io.BytesIO()
         
-        <script>
-        function selectTable() {
-            const table = document.querySelector('.table-responsive table');
-            const range = document.createRange();
-            range.selectNodeContents(table);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
-            alert('Datos seleccionados. Presiona Ctrl+C para copiar y luego pega en Excel.');
-        }
-        </script>
-        """
+        # Crear el archivo Excel con formato
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            # Escribir los datos
+            df.to_excel(writer, sheet_name='Reporte_Pozas', index=False)
+            
+            # Obtener el workbook y worksheet para aplicar formato
+            workbook = writer.book
+            worksheet = writer.sheets['Reporte_Pozas']
+            
+            # Aplicar formato al encabezado
+            from openpyxl.styles import Font, PatternFill, Alignment
+            
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="FF8C00", end_color="FF8C00", fill_type="solid")
+            
+            for cell in worksheet[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center")
+            
+            # Ajustar ancho de columnas
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+            
+            # Agregar resumen estadístico
+            capacidad_total = sum(poza.capacidad for poza in pozas)
+            ocupacion_total = sum(len(poza.cuyes) for poza in pozas)
+            porcentaje_ocupacion = (ocupacion_total / capacidad_total * 100) if capacidad_total > 0 else 0
+            pozas_llenas = len([p for p in pozas if len(p.cuyes) >= p.capacidad])
+            pozas_disponibles = len(pozas) - pozas_llenas
+            
+            resumen_data = {
+                'Resumen de Pozas': [
+                    'Total de pozas',
+                    'Pozas disponibles',
+                    'Pozas llenas',
+                    'Capacidad total',
+                    'Ocupación actual',
+                    'Porcentaje ocupación general',
+                    'Fecha de generación',
+                    'Generado por'
+                ],
+                'Valor': [
+                    len(pozas),
+                    pozas_disponibles,
+                    pozas_llenas,
+                    capacidad_total,
+                    ocupacion_total,
+                    f"{porcentaje_ocupacion:.1f}%",
+                    datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
+                    f"{current_user.nombre} {current_user.apellido}"
+                ]
+            }
+            
+            resumen_df = pd.DataFrame(resumen_data)
+            resumen_df.to_excel(writer, sheet_name='Resumen', index=False)
+            
+            # Formatear hoja de resumen
+            resumen_sheet = writer.sheets['Resumen']
+            for cell in resumen_sheet[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center")
+            
+            for column in resumen_sheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                resumen_sheet.column_dimensions[column_letter].width = adjusted_width
         
-        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'reporte_pozas_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
     
     @app.route('/reportes/estadisticas')
     @login_required
@@ -2264,6 +2789,7 @@ try:
         total_ventas = Venta.query.count()
         ventas_completadas = Venta.query.filter_by(estado='completada').count()
         ventas_pendientes = Venta.query.filter_by(estado='pendiente').count()
+        ventas_rechazadas = Venta.query.filter(Venta.estado.in_(['rechazada', 'cancelada'])).count()
         # Solo considerar ingresos de ventas completadas
         ventas_completadas_list = Venta.query.filter_by(estado='completada').all()
         ingresos_totales = sum(venta.precio for venta in ventas_completadas_list if venta.precio)
@@ -2335,7 +2861,7 @@ try:
             <div class='col-12'>
                 <h4><i class='fas fa-shopping-cart'></i> Rendimiento de Ventas</h4>
             </div>
-            <div class='col-md-3 mb-3'>
+            <div class='col-md-2 mb-3'>
                 <div class='card text-center bg-secondary text-white'>
                     <div class='card-body'>
                         <h2>{total_ventas}</h2>
@@ -2343,7 +2869,7 @@ try:
                     </div>
                 </div>
             </div>
-            <div class='col-md-3 mb-3'>
+            <div class='col-md-2 mb-3'>
                 <div class='card text-center bg-success text-white'>
                     <div class='card-body'>
                         <h2>{ventas_completadas}</h2>
@@ -2351,7 +2877,7 @@ try:
                     </div>
                 </div>
             </div>
-            <div class='col-md-3 mb-3'>
+            <div class='col-md-2 mb-3'>
                 <div class='card text-center bg-warning text-white'>
                     <div class='card-body'>
                         <h2>{ventas_pendientes}</h2>
@@ -2359,7 +2885,15 @@ try:
                     </div>
                 </div>
             </div>
-            <div class='col-md-3 mb-3'>
+            <div class='col-md-2 mb-3'>
+                <div class='card text-center bg-danger text-white'>
+                    <div class='card-body'>
+                        <h2>{ventas_rechazadas}</h2>
+                        <p>Rechazadas</p>
+                    </div>
+                </div>
+            </div>
+            <div class='col-md-4 mb-3'>
                 <div class='card text-center bg-success text-white'>
                     <div class='card-body'>
                         <h4>S/ {ingresos_totales:.2f}</h4>
@@ -2470,6 +3004,8 @@ try:
             content += f"<li>🏥 {cuyes_en_tratamiento} cuyes en tratamiento requieren seguimiento.</li>"
         if ventas_pendientes > 0:
             content += f"<li>📋 {ventas_pendientes} ventas pendientes de procesamiento.</li>"
+        if ventas_rechazadas > 0:
+            content += f"<li>❌ {ventas_rechazadas} ventas fueron rechazadas. Revisar causas.</li>"
         if total_cuyes > 0:
             porcentaje_disponibles = (cuyes_disponibles / total_cuyes * 100)
             if porcentaje_disponibles > 70:
@@ -2483,11 +3019,242 @@ try:
         
         <div class='mt-3'>
             <a href='/reportes' class='btn btn-secondary'>Volver a Reportes</a>
-            <button onclick='window.print()' class='btn btn-primary'>Imprimir Estadísticas</button>
+            <a href='/reportes/estadisticas/pdf' class='btn btn-primary'>
+                <i class='fas fa-file-pdf'></i> Generar PDF
+            </a>
         </div>
         """
         
         return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+    
+    @app.route('/reportes/estadisticas/pdf')
+    @login_required
+    def estadisticas_pdf():
+        if not (current_user.is_admin() or current_user.is_empleado()):
+            flash('No tienes permisos para generar reportes', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        # Obtener estadísticas (igual que en la función estadisticas_generales)
+        total_cuyes = Cuy.query.count()
+        cuyes_disponibles = Cuy.query.filter_by(estado='sano').count()
+        cuyes_vendidos = Cuy.query.filter_by(estado='vendido').count()
+        cuyes_en_tratamiento = Cuy.query.filter_by(estado='en_tratamiento').count()
+        
+        # Estadísticas de ventas
+        total_ventas = Venta.query.count()
+        ventas_completadas = Venta.query.filter_by(estado='completada').count()
+        ventas_pendientes = Venta.query.filter_by(estado='pendiente').count()
+        ventas_rechazadas = Venta.query.filter(Venta.estado.in_(['rechazada', 'cancelada'])).count()
+        ventas_completadas_list = Venta.query.filter_by(estado='completada').all()
+        ingresos_totales = sum(venta.precio for venta in ventas_completadas_list if venta.precio)
+        precio_promedio = sum(venta.precio for venta in ventas_completadas_list) / len(ventas_completadas_list) if ventas_completadas_list else 0
+        
+        # Estadísticas de pozas
+        total_pozas = Poza.query.count()
+        capacidad_total = sum(poza.capacidad for poza in Poza.query.all())
+        ocupacion_total = Cuy.query.filter(Cuy.estado.in_(['sano', 'en_tratamiento']), Cuy.poza_id.isnot(None)).count()
+        porcentaje_ocupacion = (ocupacion_total / capacidad_total * 100) if capacidad_total > 0 else 0
+        
+        # Crear el documento PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*inch)
+        
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Title'],
+            fontSize=20,
+            textColor=colors.darkblue,
+            spaceAfter=30,
+            alignment=1  # Center
+        )
+        
+        subtitle_style = ParagraphStyle(
+            'SubtitleStyle',
+            parent=styles['Heading2'],
+            fontSize=14,
+            textColor=colors.darkgreen,
+            spaceAfter=15,
+            spaceBefore=20
+        )
+        
+        # Contenido del documento
+        story = []
+        
+        # Título
+        title = Paragraph("ESTADÍSTICAS GENERALES DEL SISTEMA<br/>INIA ANDAHUAYLAS", title_style)
+        story.append(title)
+        
+        # Información del reporte
+        info_style = ParagraphStyle(
+            'InfoStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            spaceAfter=20
+        )
+        fecha_actual = datetime.now().strftime('%d/%m/%Y %H:%M')
+        info_text = f"<b>Fecha del reporte:</b> {fecha_actual}<br/><b>Generado por:</b> {current_user.nombre} {current_user.apellido}<br/><i>Los ingresos incluyen solo ventas completadas</i>"
+        info_para = Paragraph(info_text, info_style)
+        story.append(info_para)
+        story.append(Spacer(1, 20))
+        
+        # Estadísticas de Cuyes
+        cuyes_subtitle = Paragraph("INVENTARIO DE CUYES", subtitle_style)
+        story.append(cuyes_subtitle)
+        
+        cuyes_data = [
+            ['Concepto', 'Valor'],
+            ['Total de Cuyes', str(total_cuyes)],
+            ['Cuyes Disponibles', str(cuyes_disponibles)],
+            ['Cuyes en Tratamiento', str(cuyes_en_tratamiento)],
+            ['Cuyes Vendidos', str(cuyes_vendidos)]
+        ]
+        
+        cuyes_table = Table(cuyes_data, colWidths=[3*inch, 2*inch])
+        cuyes_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.lightblue, colors.white])
+        ]))
+        story.append(cuyes_table)
+        story.append(Spacer(1, 15))
+        
+        # Estadísticas de Ventas
+        ventas_subtitle = Paragraph("RENDIMIENTO DE VENTAS", subtitle_style)
+        story.append(ventas_subtitle)
+        
+        ventas_data = [
+            ['Concepto', 'Valor'],
+            ['Total de Ventas', str(total_ventas)],
+            ['Ventas Completadas', str(ventas_completadas)],
+            ['Ventas Pendientes', str(ventas_pendientes)],
+            ['Ventas Rechazadas', str(ventas_rechazadas)],
+            ['Ingresos Totales', f'S/ {ingresos_totales:.2f}'],
+            ['Precio Promedio', f'S/ {precio_promedio:.2f}']
+        ]
+        
+        ventas_table = Table(ventas_data, colWidths=[3*inch, 2*inch])
+        ventas_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkgreen),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.lightgreen, colors.white])
+        ]))
+        story.append(ventas_table)
+        story.append(Spacer(1, 15))
+        
+        # Estadísticas de Pozas
+        pozas_subtitle = Paragraph("GESTIÓN DE POZAS", subtitle_style)
+        story.append(pozas_subtitle)
+        
+        pozas_data = [
+            ['Concepto', 'Valor'],
+            ['Total de Pozas', str(total_pozas)],
+            ['Capacidad Total', str(capacidad_total)],
+            ['Cuyes Alojados', str(ocupacion_total)],
+            ['Porcentaje de Ocupación', f'{porcentaje_ocupacion:.1f}%']
+        ]
+        
+        pozas_table = Table(pozas_data, colWidths=[3*inch, 2*inch])
+        pozas_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkorange),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.lightyellow, colors.white])
+        ]))
+        story.append(pozas_table)
+        story.append(Spacer(1, 20))
+        
+        # Distribución por Raza
+        razas_subtitle = Paragraph("DISTRIBUCIÓN POR RAZA", subtitle_style)
+        story.append(razas_subtitle)
+        
+        razas_stats = db.session.query(Raza.nombre, db.func.count(Cuy.id)).join(Cuy, Raza.id == Cuy.raza_id).group_by(Raza.nombre).all()
+        if not razas_stats:
+            cuyes_sin_raza = Cuy.query.filter_by(raza_id=None).count()
+            if cuyes_sin_raza > 0:
+                razas_stats = [('Sin raza definida', cuyes_sin_raza)]
+        
+        if razas_stats:
+            razas_data = [['Raza', 'Cantidad', 'Porcentaje']]
+            for raza, cantidad in razas_stats:
+                porcentaje = (cantidad / total_cuyes * 100) if total_cuyes > 0 else 0
+                razas_data.append([raza, str(cantidad), f'{porcentaje:.1f}%'])
+        else:
+            razas_data = [['Raza', 'Cantidad', 'Porcentaje'], ['No hay datos disponibles', '-', '-']]
+        
+        razas_table = Table(razas_data, colWidths=[2.5*inch, 1.5*inch, 1.5*inch])
+        razas_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.purple),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.lavender, colors.white])
+        ]))
+        story.append(razas_table)
+        story.append(Spacer(1, 20))
+        
+        # Recomendaciones
+        recomendaciones_subtitle = Paragraph("RECOMENDACIONES DEL SISTEMA", subtitle_style)
+        story.append(recomendaciones_subtitle)
+        
+        recomendaciones = []
+        if porcentaje_ocupacion > 90:
+            recomendaciones.append("⚠️ Pozas cerca del límite de capacidad. Considerar expansión.")
+        if cuyes_en_tratamiento > 0:
+            recomendaciones.append(f"🏥 {cuyes_en_tratamiento} cuyes en tratamiento requieren seguimiento.")
+        if ventas_pendientes > 0:
+            recomendaciones.append(f"📋 {ventas_pendientes} ventas pendientes de procesamiento.")
+        if ventas_rechazadas > 0:
+            recomendaciones.append(f"❌ {ventas_rechazadas} ventas fueron rechazadas. Revisar causas y mejorar proceso.")
+        if total_cuyes > 0:
+            porcentaje_disponibles = (cuyes_disponibles / total_cuyes * 100)
+            if porcentaje_disponibles > 70:
+                recomendaciones.append("✅ Buen inventario disponible para ventas.")
+        
+        if not recomendaciones:
+            recomendaciones.append("✅ Sistema operando dentro de parámetros normales.")
+        
+        for recomendacion in recomendaciones:
+            recom_para = Paragraph(f"• {recomendacion}", styles['Normal'])
+            story.append(recom_para)
+            story.append(Spacer(1, 8))
+        
+        # Generar el PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'estadisticas_generales_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
+            mimetype='application/pdf'
+        )
     
     @app.route('/logout')
     @login_required
@@ -3249,12 +4016,16 @@ try:
             
             if venta.estado == 'pendiente':
                 content += f"""
-                                    <a href='/admin/ventas/{venta.id}/completar' class='btn btn-sm btn-success me-1'>
-                                        <i class='fas fa-check'></i> Completar
-                                    </a>
-                                    <a href='/admin/ventas/{venta.id}/cancelar' class='btn btn-sm btn-danger'>
-                                        <i class='fas fa-times'></i> Cancelar
-                                    </a>
+                                    <form method="POST" action="/venta/{venta.id}/completar" style="display:inline;">
+                                        <button type="submit" class="btn btn-sm btn-success me-1" onclick="return confirm('¿Marcar como completada?')">
+                                            <i class='fas fa-check'></i> Completar
+                                        </button>
+                                    </form>
+                                    <form method="POST" action="/venta/{venta.id}/cancelar" style="display:inline;">
+                                        <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('¿Cancelar venta?')">
+                                            <i class='fas fa-times'></i> Cancelar
+                                        </button>
+                                    </form>
                 """
             else:
                 content += f"""
@@ -3292,45 +4063,6 @@ try:
         """
         
         return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
-    
-    @app.route('/admin/ventas/<int:venta_id>/completar')
-    @login_required
-    def completar_venta(venta_id):
-        if not (current_user.is_admin() or current_user.is_empleado()):
-            flash('No tienes permisos para esta acción', 'danger')
-            return redirect(url_for('dashboard'))
-        
-        venta = Venta.query.get_or_404(venta_id)
-        
-        if venta.estado == 'pendiente':
-            venta.estado = 'completada'
-            db.session.commit()
-            flash(f'Venta #{venta.id} marcada como completada', 'success')
-        else:
-            flash('Esta venta ya no puede ser modificada', 'warning')
-        
-        return redirect(url_for('admin_ventas'))
-    
-    @app.route('/admin/ventas/<int:venta_id>/cancelar')
-    @login_required
-    def cancelar_venta(venta_id):
-        if not (current_user.is_admin() or current_user.is_empleado()):
-            flash('No tienes permisos para esta acción', 'danger')
-            return redirect(url_for('dashboard'))
-        
-        venta = Venta.query.get_or_404(venta_id)
-        
-        if venta.estado == 'pendiente':
-            venta.estado = 'cancelada'
-            # Devolver el cuy al estado disponible
-            if venta.cuy:
-                venta.cuy.estado = 'sano'
-            db.session.commit()
-            flash(f'Venta #{venta.id} cancelada y cuy devuelto al inventario', 'success')
-        else:
-            flash('Esta venta ya no puede ser modificada', 'warning')
-        
-        return redirect(url_for('admin_ventas'))
     
     @app.route('/perfil')
     @login_required
