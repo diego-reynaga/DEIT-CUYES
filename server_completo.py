@@ -544,6 +544,15 @@ try:
         ], coerce=int, validators=[DataRequired()])
         comentario = TextAreaField('Comentario', validators=[DataRequired()])
     
+    # ========== FUNCIONES AUXILIARES ==========
+    def actualizar_ocupacion_pozas():
+        """Actualiza la ocupación actual de todas las pozas basándose en el conteo real de cuyes"""
+        pozas = Poza.query.all()
+        for poza in pozas:
+            cuyes_actuales = Cuy.query.filter_by(poza_id=poza.id, estado='sano').count()
+            poza.ocupacion_actual = cuyes_actuales
+        db.session.commit()
+
     # ========== RUTAS ==========
     @app.route('/')
     def index():
@@ -663,7 +672,7 @@ try:
     def dashboard():
         # Obtener estadísticas básicas
         total_cuyes = Cuy.query.count()
-        cuyes_disponibles = Cuy.query.filter_by(estado='disponible').count()
+        cuyes_disponibles = Cuy.query.filter_by(estado='sano').count()
         total_pozas = Poza.query.count()
         total_ventas = Venta.query.count()
         
@@ -754,8 +763,8 @@ try:
             """
         else:
             # Estadísticas para clientes
-            mis_compras = Venta.query.filter_by(email_cliente=current_user.email).count()
-            mis_compras_pendientes = Venta.query.filter_by(email_cliente=current_user.email, estado='pendiente').count()
+            mis_compras = Venta.query.filter_by(cliente_id=current_user.id).count()
+            mis_compras_pendientes = Venta.query.filter_by(cliente_id=current_user.id, estado='pendiente').count()
             
             admin_stats = f"""
             <div class='row mb-4'>
@@ -966,6 +975,14 @@ try:
         form.poza_id.choices = [(p.id, f"{p.codigo} - {p.tipo}") for p in Poza.query.all()]
         
         if form.validate_on_submit():
+            # Verificar capacidad de la poza
+            poza = Poza.query.get(form.poza_id.data)
+            cuyes_actuales = Cuy.query.filter_by(poza_id=poza.id, estado='sano').count() if poza else 0
+            
+            if poza and cuyes_actuales >= poza.capacidad:
+                flash(f'La poza {poza.codigo} ha alcanzado su capacidad máxima ({poza.capacidad} cuyes). Actualmente tiene {cuyes_actuales} cuyes.', 'danger')
+                return render_template_string(FORM_TEMPLATE, form=form, title="Registrar Nuevo Cuy", action=url_for('nuevo_cuy'))
+            
             cuy = Cuy(
                 codigo=form.codigo.data,
                 sexo=form.sexo.data,
@@ -975,8 +992,13 @@ try:
                 poza_id=form.poza_id.data,
                 observaciones=form.observaciones.data
             )
+            
             db.session.add(cuy)
             db.session.commit()
+            
+            # Actualizar ocupación de pozas
+            actualizar_ocupacion_pozas()
+            
             flash('Cuy registrado exitosamente', 'success')
             return redirect(url_for('cuyes'))
         
@@ -1168,7 +1190,7 @@ try:
                         <h5 class='mb-0'>Cuy {cuy.codigo}</h5>
                     </div>
                     <div class='card-body'>
-                        <p><strong>Raza:</strong> {cuy.raza.nombre if cuy.raza else 'N/A'}</p>
+                        <p><strong>Raza:</strong> {cuy.raza_obj.nombre if cuy.raza_obj else 'N/A'}</p>
                         <p><strong>Sexo:</strong> {cuy.sexo.title()}</p>
                         <p><strong>Peso:</strong> {cuy.peso_actual:.2f} kg</p>
                         <p><strong>Estado:</strong> <span class='badge bg-success'>{cuy.estado.title()}</span></p>
@@ -1364,6 +1386,96 @@ try:
         <div class='mt-3'>
             <a href='/catalogo' class='btn btn-success me-2'>Ver Catálogo</a>
             <a href='/dashboard' class='btn btn-secondary'>Volver al Dashboard</a>
+        </div>
+        """
+        
+        return render_template_string(BASE_TEMPLATE.replace('{{content}}', content))
+    
+    @app.route('/compra/<int:compra_id>')
+    @login_required
+    def detalle_compra(compra_id):
+        if not current_user.is_cliente():
+            flash('Acceso denegado', 'danger')
+            return redirect(url_for('dashboard'))
+        
+        compra = Venta.query.filter_by(id=compra_id, cliente_id=current_user.id).first_or_404()
+        
+        content = f"""
+        <div class='row justify-content-center'>
+            <div class='col-md-8'>
+                <div class='card'>
+                    <div class='card-header bg-primary text-white'>
+                        <h4><i class='fas fa-receipt'></i> Detalle de Compra #{compra.id}</h4>
+                    </div>
+                    <div class='card-body'>
+                        <div class='row'>
+                            <div class='col-md-6'>
+                                <h5>Información del Cuy</h5>
+                                <table class='table table-sm'>
+                                    <tr>
+                                        <td><strong>Código:</strong></td>
+                                        <td>{compra.cuy.codigo if compra.cuy else 'N/A'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Raza:</strong></td>
+                                        <td>{compra.cuy.raza_obj.nombre if compra.cuy and compra.cuy.raza_obj else 'N/A'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Sexo:</strong></td>
+                                        <td>{compra.cuy.sexo.title() if compra.cuy else 'N/A'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Peso en venta:</strong></td>
+                                        <td>{compra.peso_venta if compra.peso_venta else compra.cuy.peso_actual if compra.cuy else 'N/A'} kg</td>
+                                    </tr>
+                                </table>
+                            </div>
+                            <div class='col-md-6'>
+                                <h5>Información de la Compra</h5>
+                                <table class='table table-sm'>
+                                    <tr>
+                                        <td><strong>Fecha de compra:</strong></td>
+                                        <td>{compra.fecha_venta.strftime('%d/%m/%Y') if compra.fecha_venta else 'N/A'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Precio:</strong></td>
+                                        <td><h5 class='text-success'>S/ {compra.precio:.2f}</h5></td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Método de pago:</strong></td>
+                                        <td>{compra.metodo_pago.title()}</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Estado:</strong></td>
+                                        <td>
+                                            <span class='badge bg-{"success" if compra.estado == "completada" else "warning" if compra.estado == "pendiente" else "danger"} fs-6'>
+                                                {compra.estado.title()}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        {f"<div class='mt-3'><h5>Observaciones:</h5><p class='text-muted'>{compra.observaciones}</p></div>" if compra.observaciones else ""}
+                        
+                        <div class='mt-4 text-center'>
+                            {f'<div class="alert alert-success"><i class="fas fa-check-circle"></i> Compra completada exitosamente</div>' if compra.estado == 'completada' else ''}
+                            {f'<div class="alert alert-warning"><i class="fas fa-clock"></i> Tu compra está siendo procesada. Te contactaremos pronto.</div>' if compra.estado == 'pendiente' else ''}
+                            {f'<div class="alert alert-danger"><i class="fas fa-times-circle"></i> Compra cancelada.</div>' if compra.estado == 'cancelada' else ''}
+                        </div>
+                        
+                        <div class='d-grid gap-2 d-md-flex justify-content-md-center mt-4'>
+                            <a href='/mis-compras' class='btn btn-secondary me-md-2'>
+                                <i class='fas fa-arrow-left'></i> Volver a Mis Compras
+                            </a>
+                            <a href='/catalogo' class='btn btn-primary'>
+                                <i class='fas fa-shopping-cart'></i> Seguir Comprando
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
         """
         
@@ -2142,7 +2254,7 @@ try:
         
         # Estadísticas de cuyes
         total_cuyes = Cuy.query.count()
-        cuyes_disponibles = Cuy.query.filter_by(estado='disponible').count()
+        cuyes_disponibles = Cuy.query.filter_by(estado='sano').count()
         cuyes_vendidos = Cuy.query.filter_by(estado='vendido').count()
         cuyes_en_tratamiento = Cuy.query.filter_by(estado='en_tratamiento').count()
         
@@ -2365,7 +2477,7 @@ try:
     def dashboard_new():
         # Obtener estadísticas básicas
         total_cuyes = Cuy.query.count()
-        cuyes_disponibles = Cuy.query.filter_by(estado='disponible').count()
+        cuyes_disponibles = Cuy.query.filter_by(estado='sano').count()
         total_pozas = Poza.query.count()
         total_ventas = Venta.query.count()
         
@@ -2610,73 +2722,83 @@ try:
             
         # DASHBOARD PARA CLIENTE
         else:
-            mis_compras = Venta.query.filter_by(email_cliente=current_user.email).count()
-            mis_compras_pendientes = Venta.query.filter_by(email_cliente=current_user.email, estado='pendiente').count()
+            mis_compras = Venta.query.filter_by(cliente_id=current_user.id).count()
+            mis_compras_pendientes = Venta.query.filter_by(cliente_id=current_user.id, estado='pendiente').count()
             
             content = f"""
-            <h2><i class='fas fa-user'></i> Mi Panel de Cliente</h2>
-            
-            <div class='alert alert-primary'>
-                <i class='fas fa-user'></i>
-                <strong>Bienvenido, {current_user.nombre}</strong><br>
-                Cliente INIA | {datetime.now().strftime('%d/%m/%Y %H:%M')}
-            </div>
-            
-            <div class='row mb-4'>
-                <div class='col-md-4 mb-3'>
-                    <div class='card text-center bg-success text-white'>
-                        <div class='card-body'>
-                            <i class='fas fa-paw fa-2x mb-2'></i>
-                            <h3>{cuyes_disponibles}</h3>
-                            <p>Cuyes Disponibles</p>
+            <div class='row justify-content-center mb-4'>
+                <div class='col-md-10'>
+                    <div class='card border-0 shadow-sm'>
+                        <div class='card-header bg-gradient text-white text-center' style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);'>
+                            <h2 class='mb-0'><i class='fas fa-user-circle'></i> Mi Panel de Cliente</h2>
+                            <p class='mb-0 mt-2'>Bienvenido, {current_user.nombre} | Cliente INIA</p>
                         </div>
-                    </div>
-                </div>
-                <div class='col-md-4 mb-3'>
-                    <div class='card text-center bg-primary text-white'>
-                        <div class='card-body'>
-                            <i class='fas fa-shopping-bag fa-2x mb-2'></i>
-                            <h3>{mis_compras}</h3>
-                            <p>Mis Compras</p>
-                        </div>
-                    </div>
-                </div>
-                <div class='col-md-4 mb-3'>
-                    <div class='card text-center bg-warning text-white'>
-                        <div class='card-body'>
-                            <i class='fas fa-clock fa-2x mb-2'></i>
-                            <h3>{mis_compras_pendientes}</h3>
-                            <p>Compras Pendientes</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class='row'>
-                <div class='col-md-6 mb-3'>
-                    <div class='card'>
-                        <div class='card-header bg-success text-white'>
-                            <h5><i class='fas fa-store'></i> Catálogo de Cuyes</h5>
-                        </div>
-                        <div class='card-body'>
-                            <p>Explora nuestros cuyes disponibles.</p>
-                            <div class='d-grid gap-2'>
-                                <a href='/catalogo' class='btn btn-success'>Ver Catálogo</a>
+                        <div class='card-body bg-light'>
+                            <div class='row text-center'>
+                                <div class='col-md-4 mb-3'>
+                                    <div class='card border-0 shadow-sm h-100'>
+                                        <div class='card-body bg-white'>
+                                            <div class='text-success mb-3'>
+                                                <i class='fas fa-paw fa-3x'></i>
+                                            </div>
+                                            <h3 class='text-success'>{cuyes_disponibles}</h3>
+                                            <p class='text-muted'>Cuyes Disponibles</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class='col-md-4 mb-3'>
+                                    <div class='card border-0 shadow-sm h-100'>
+                                        <div class='card-body bg-white'>
+                                            <div class='text-primary mb-3'>
+                                                <i class='fas fa-shopping-bag fa-3x'></i>
+                                            </div>
+                                            <h3 class='text-primary'>{mis_compras}</h3>
+                                            <p class='text-muted'>Mis Compras</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class='col-md-4 mb-3'>
+                                    <div class='card border-0 shadow-sm h-100'>
+                                        <div class='card-body bg-white'>
+                                            <div class='text-warning mb-3'>
+                                                <i class='fas fa-clock fa-3x'></i>
+                                            </div>
+                                            <h3 class='text-warning'>{mis_compras_pendientes}</h3>
+                                            <p class='text-muted'>Compras Pendientes</p>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class='row justify-content-center'>
+                <div class='col-md-5 mb-4'>
+                    <div class='card h-100 border-0 shadow-sm'>
+                        <div class='card-header bg-success text-white text-center'>
+                            <h5 class='mb-0'><i class='fas fa-store'></i> Catálogo de Cuyes</h5>
+                        </div>
+                        <div class='card-body text-center d-flex flex-column'>
+                            <p class='flex-grow-1'>Explora nuestro catálogo de cuyes de alta calidad genética disponibles para compra.</p>
+                            <a href='/catalogo' class='btn btn-success btn-lg'>
+                                <i class='fas fa-eye'></i> Ver Catálogo
+                            </a>
                         </div>
                     </div>
                 </div>
                 
-                <div class='col-md-6 mb-3'>
-                    <div class='card'>
-                        <div class='card-header bg-primary text-white'>
-                            <h5><i class='fas fa-shopping-bag'></i> Mis Compras</h5>
+                <div class='col-md-5 mb-4'>
+                    <div class='card h-100 border-0 shadow-sm'>
+                        <div class='card-header bg-primary text-white text-center'>
+                            <h5 class='mb-0'><i class='fas fa-shopping-bag'></i> Mis Compras</h5>
                         </div>
-                        <div class='card-body'>
-                            <p>Historial de compras y estado.</p>
-                            <div class='d-grid gap-2'>
-                                <a href='/mis-compras' class='btn btn-primary'>Ver Mis Compras</a>
-                            </div>
+                        <div class='card-body text-center d-flex flex-column'>
+                            <p class='flex-grow-1'>Revisa el historial completo de tus compras y el estado de tus pedidos.</p>
+                            <a href='/mis-compras' class='btn btn-primary btn-lg'>
+                                <i class='fas fa-list'></i> Ver Mis Compras
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -3027,6 +3149,10 @@ try:
                 print("✓ Datos básicos creados")
             else:
                 print("✓ Datos básicos ya existen")
+            
+            # Actualizar ocupación de pozas al iniciar
+            actualizar_ocupacion_pozas()
+            print("✓ Ocupación de pozas actualizada")
                 
         except Exception as e:
             print(f"⚠ Error de base de datos: {e}")

@@ -91,12 +91,12 @@ CUYES_TEMPLATE = """
                             <tr>
                                 <td>{{ cuy.codigo }}</td>
                                 <td>
-                                    <span class="badge bg-{{ 'primary' if cuy.sexo == 'macho' else 'pink' }}">
+                                    <span class="badge bg-{{ 'primary' if cuy.sexo == 'macho' else 'danger' }}">
                                         {{ cuy.sexo.title() }}
                                     </span>
                                 </td>
                                 <td>{{ cuy.peso_actual or 'N/A' }} kg</td>
-                                <td>{{ cuy.raza.nombre if cuy.raza else 'N/A' }}</td>
+                                <td>{{ cuy.raza_obj.nombre if cuy.raza_obj else 'N/A' }}</td>
                                 <td>{{ cuy.poza.codigo if cuy.poza else 'N/A' }}</td>
                                 <td>
                                     <span class="badge bg-success">{{ cuy.estado.title() }}</span>
