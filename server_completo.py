@@ -680,7 +680,9 @@ try:
         if current_user.is_admin() or current_user.is_empleado():
             ventas_pendientes = Venta.query.filter_by(estado='pendiente').count()
             cuyes_en_tratamiento = Cuy.query.filter_by(estado='en_tratamiento').count()
-            ingresos_totales = sum(venta.total for venta in Venta.query.filter_by(estado='completada').all())
+            # Solo considerar ingresos de ventas completadas usando precio
+            ventas_completadas = Venta.query.filter_by(estado='completada').all()
+            ingresos_totales = sum(venta.precio for venta in ventas_completadas if venta.precio)
             
             admin_stats = f"""
             <div class='row mb-4'>
@@ -751,7 +753,7 @@ try:
                     </div>
                 </div>
                 <div class='col-md-3 mb-3'>
-                    <div class='card text-center bg-gradient text-white' style='background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);'>
+                    <div class='card text-center bg-dark text-white shadow'>
                         <div class='card-body'>
                             <i class='fas fa-users fa-2x mb-2'></i>
                             <h3>{Usuario.query.filter_by(rol='cliente').count()}</h3>
@@ -2262,13 +2264,19 @@ try:
         total_ventas = Venta.query.count()
         ventas_completadas = Venta.query.filter_by(estado='completada').count()
         ventas_pendientes = Venta.query.filter_by(estado='pendiente').count()
-        ingresos_totales = sum(venta.total for venta in Venta.query.all())
+        # Solo considerar ingresos de ventas completadas
+        ventas_completadas_list = Venta.query.filter_by(estado='completada').all()
+        ingresos_totales = sum(venta.precio for venta in ventas_completadas_list if venta.precio)
         
         # Estadísticas de pozas
         total_pozas = Poza.query.count()
         capacidad_total = sum(poza.capacidad for poza in Poza.query.all())
-        ocupacion_total = sum(len(poza.cuyes) for poza in Poza.query.all())
+        # Contar solo cuyes activos en pozas
+        ocupacion_total = Cuy.query.filter(Cuy.estado.in_(['sano', 'en_tratamiento']), Cuy.poza_id.isnot(None)).count()
         porcentaje_ocupacion = (ocupacion_total / capacidad_total * 100) if capacidad_total > 0 else 0
+        
+        # Estadísticas adicionales
+        precio_promedio = sum(venta.precio for venta in ventas_completadas_list) / len(ventas_completadas_list) if ventas_completadas_list else 0
         
         content = f"""
         <h2>Estadísticas Generales del Sistema</h2>
@@ -2278,6 +2286,7 @@ try:
                 <div class='alert alert-primary'>
                     <h4><i class='fas fa-chart-line'></i> Resumen Ejecutivo - INIA Andahuaylas</h4>
                     <p>Fecha del reporte: {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+                    <small><strong>Nota:</strong> Los ingresos incluyen solo ventas completadas</small>
                 </div>
             </div>
         </div>
@@ -2355,6 +2364,7 @@ try:
                     <div class='card-body'>
                         <h4>S/ {ingresos_totales:.2f}</h4>
                         <p>Ingresos Totales</p>
+                        <small class='text-light'>Precio promedio: S/ {precio_promedio:.2f}</small>
                     </div>
                 </div>
             </div>
@@ -2415,7 +2425,14 @@ try:
                         <tbody>
         """
         
-        razas_stats = db.session.query(Cuy.raza, db.func.count(Cuy.id)).group_by(Cuy.raza).all()
+        # Corregir consulta de razas usando la relación correcta
+        razas_stats = db.session.query(Raza.nombre, db.func.count(Cuy.id)).join(Cuy, Raza.id == Cuy.raza_id).group_by(Raza.nombre).all()
+        if not razas_stats:
+            # Si no hay relaciones, mostrar cuyes sin raza definida
+            cuyes_sin_raza = Cuy.query.filter_by(raza_id=None).count()
+            if cuyes_sin_raza > 0:
+                razas_stats = [('Sin raza definida', cuyes_sin_raza)]
+        
         for raza, cantidad in razas_stats:
             porcentaje = (cantidad / total_cuyes * 100) if total_cuyes > 0 else 0
             content += f"""
@@ -2423,6 +2440,13 @@ try:
                                 <td>{raza}</td>
                                 <td>{cantidad}</td>
                                 <td>{porcentaje:.1f}%</td>
+                            </tr>
+            """
+        
+        if not razas_stats:
+            content += """
+                            <tr>
+                                <td colspan='3' class='text-center text-muted'>No hay datos de razas disponibles</td>
                             </tr>
             """
         
